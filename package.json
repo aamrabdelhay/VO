@@ -5,7 +5,7 @@
     "dev": "next dev",
     "db:prepare:vercel": "node scripts/prepare-vercel-db.mjs",
     "db:push": "drizzle-kit push --config drizzle.config.ts --force",
-    "prebuild": "npm run db:prepare:vercel && npm run db:push",
+    "prebuild": "npm run db:prepare:vercel",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
