@@ -1,0 +1,45 @@
+name: Garvex realtime verification
+
+on:
+  push:
+    paths:
+      - "realtime-agent/**"
+      - "src/app/api/v1/admin/garvex/realtime/**"
+      - "src/components/garvex-realtime-voice.tsx"
+      - "src/app/(app)/admin/garvex/page.tsx"
+      - "package.json"
+  pull_request:
+    paths:
+      - "realtime-agent/**"
+      - "src/app/api/v1/admin/garvex/realtime/**"
+      - "src/components/garvex-realtime-voice.tsx"
+      - "src/app/(app)/admin/garvex/page.tsx"
+      - "package.json"
+
+jobs:
+  realtime-agent:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: realtime-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: realtime-agent/package.json
+      - run: npm install --no-package-lock
+      - run: npm run typecheck
+
+  vo-app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm install --no-package-lock
+      - run: npm run typecheck
