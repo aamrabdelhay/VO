@@ -8,10 +8,13 @@ if (!url) throw new Error("DATABASE_URL is required for the Vercel database boot
 const client = new pg.Client({ connectionString: url });
 try {
   await client.connect();
-  // These are the only tables created by our temporary repair layer. The
-  // production schema will recreate them with the canonical Drizzle definition.
-  await client.query(`DROP TABLE IF EXISTS job_runs, jobs, container_instances CASCADE`);
-  await client.query(`DROP TYPE IF EXISTS job_status CASCADE`);
+  // Keep the live database intact. Only apply the small additive compatibility
+  // change needed by the hosted control plane; never drop operational tables
+  // during a Vercel build.
+  await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS free_domain text`);
+  await client.query(`UPDATE projects SET free_domain = lower(regexp_replace(trim(slug), '[^a-zA-Z0-9-]', '-', 'g')) WHERE free_domain IS NULL OR free_domain = ''`);
+  await client.query(`ALTER TABLE projects ALTER COLUMN free_domain SET NOT NULL`);
+  await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS projects_free_domain_uq ON projects (free_domain)`);
 } finally {
   await client.end().catch(() => {});
 }
