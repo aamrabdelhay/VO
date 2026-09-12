@@ -1,12 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 const PRESETS = [
   { key: "VERCEL_DEPLOY_TOKEN", label: "Vercel Deploy Token", hint: "Used by VO to create deployments and aliases on Vercel." },
   { key: "VERCEL_DEPLOY_TEAM_ID", label: "Vercel Team ID", hint: "Your Vercel team identifier; it is not a secret but is kept here with the hosting configuration." },
-  { key: "NVIDIA_API_KEY", label: "NVIDIA API Key", hint: "Optional platform-wide NVIDIA AI key for the built-in AI editor." },
+  { key: "NVIDIA_API_KEY", label: "NVIDIA API Key", hint: "DeepSeek V4 Flash free endpoint for Garvex and the existing AI editor." },
+  { key: "OPENROUTER_API_KEY", label: "OpenRouter API Key", hint: "Multi-model gateway and free-model pool." },
+  { key: "MISTRAL_API_KEY", label: "Mistral API Key", hint: "Fast text/coding model provider; free mode has usage limits." },
+  { key: "CEREBRAS_API_KEY", label: "Cerebras API Key", hint: "Very fast inference endpoint for parallel agent workers." },
+  { key: "GROQ_API_KEY", label: "Groq API Key", hint: "Very fast inference plus speech models available on GroqCloud." },
+  { key: "KILO_API_KEY", label: "Kilo API Key", hint: "Gateway with Auto Free and many coding models." },
+  { key: "COHERE_API_KEY", label: "Cohere API Key", hint: "Useful for multilingual/enterprise text and rerank workloads." },
+  { key: "CLOUDFLARE_API_TOKEN", label: "Cloudflare AI Token", hint: "Cloudflare Workers AI / AI Gateway credential." },
+  { key: "CLOUDFLARE_ACCOUNT_ID", label: "Cloudflare Account ID", hint: "Required with the Cloudflare API token for account-scoped AI calls." },
+  { key: "OLLAMA_API_KEY", label: "Ollama Cloud API Key", hint: "Optional Ollama cloud provider credential." },
 ];
 
 async function request(path: string, options: RequestInit, csrf: string) {
@@ -22,37 +31,38 @@ async function request(path: string, options: RequestInit, csrf: string) {
 
 export function PlatformSecretsForm({ csrf, initial = [] }: { csrf: string; initial?: { key: string; last_four: string | null; updated_at: string }[] }) {
   const router = useRouter();
+  const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(PRESETS[0].key);
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const selectedMeta = PRESETS.find((item) => item.key === selected)!;
+  const filtered = useMemo(() => PRESETS.filter((item) => `${item.key} ${item.label}`.toLowerCase().includes(search.toLowerCase())).slice(0, 12), [search]);
+  const selectedMeta = PRESETS.find((item) => item.key === selected) ?? PRESETS[0];
   const existing = initial.find((item) => item.key === selected);
+
+  const choose = (key: string) => {
+    setSelected(key);
+    setSearch(key);
+    setValue("");
+    setMessage(null);
+  };
 
   return (
     <div className="p-3.5">
-      <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
+      <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
         <div>
-          <label className="label" htmlFor="platform-secret-search">Quick add</label>
+          <label className="label" htmlFor="platform-secret-search">Quick add / search</label>
           <input
             id="platform-secret-search"
-            className="input"
-            placeholder="Search secret name…"
-            list="platform-secret-presets"
-            value={selected}
-            onChange={(event) => {
-              setSelected(event.target.value.toUpperCase());
-              setValue("");
-              setMessage(null);
-            }}
+            className="input mono"
+            placeholder="Search provider secret…"
+            value={search}
+            onChange={(event) => setSearch(event.target.value.toUpperCase())}
           />
-          <datalist id="platform-secret-presets">
-            {PRESETS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
-          </datalist>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {PRESETS.map((item) => (
-              <button key={item.key} type="button" className="btn" onClick={() => { setSelected(item.key); setValue(""); setMessage(null); }}>
-                {item.label}
+          <div className="mt-2 flex flex-col gap-1">
+            {filtered.map((item) => (
+              <button key={item.key} type="button" className="btn justify-start" onClick={() => choose(item.key)}>
+                <span>{item.label}</span><span className="mono ml-auto text-[10px] opacity-60">{item.key}</span>
               </button>
             ))}
           </div>
