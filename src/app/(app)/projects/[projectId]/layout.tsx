@@ -18,34 +18,19 @@ const TABS = [
   { segment: "domains", label: "Domains" },
   { segment: "monitoring", label: "Monitoring" },
   { segment: "ai", label: "AI" },
+  { segment: "ai/editor", label: "AI Editor" },
   { segment: "activity", label: "Activity" },
   { segment: "settings", label: "Settings" },
 ];
 
-export default async function ProjectLayout({
-  children,
-  params,
-}: {
-  children: ReactNode;
-  params: Promise<{ projectId: string }>;
-}) {
+export default async function ProjectLayout({ children, params }: { children: ReactNode; params: Promise<{ projectId: string }> }) {
   const { projectId } = await params;
   let access;
-  try {
-    access = await requireProjectAccess(projectId);
-  } catch (error) {
-    if (error instanceof HttpError && error.status === 404) notFound();
-    throw error;
-  }
+  try { access = await requireProjectAccess(projectId); }
+  catch (error) { if (error instanceof HttpError && error.status === 404) notFound(); throw error; }
   const { project, user } = access;
   const current = project.currentHealthyDeploymentId
-    ? (
-        await db
-          .select()
-          .from(deployments)
-          .where(eq(deployments.id, project.currentHealthyDeploymentId))
-          .limit(1)
-      )[0]
+    ? (await db.select().from(deployments).where(eq(deployments.id, project.currentHealthyDeploymentId)).limit(1))[0]
     : null;
 
   return (
@@ -64,32 +49,15 @@ export default async function ProjectLayout({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <a className="btn" href={`/edge/${project.slug}/`} target="_blank" rel="noreferrer">
-            Open app
-          </a>
-          <ActionButton
-            csrf={user.csrfToken}
-            path={`/api/v1/projects/${project.id}/deployments`}
-            body={{ branch: project.productionBranch }}
-            variant="btn-primary"
-          >
-            Deploy
-          </ActionButton>
+          <a className="btn" href={`/edge/${project.slug}/`} target="_blank" rel="noreferrer">Open app</a>
+          <ActionButton csrf={user.csrfToken} path={`/api/v1/projects/${project.id}/deployments`} body={{ branch: project.productionBranch }} variant="btn-primary">Deploy</ActionButton>
         </div>
       </header>
-
       <nav className="flex overflow-x-auto border-b" aria-label="Project sections">
         {TABS.map((tab) => (
-          <Link
-            key={tab.segment}
-            className="tab whitespace-nowrap"
-            href={`/projects/${projectId}${tab.segment ? `/${tab.segment}` : ""}`}
-          >
-            {tab.label}
-          </Link>
+          <Link key={tab.segment} className="tab whitespace-nowrap" href={`/projects/${projectId}${tab.segment ? `/${tab.segment}` : ""}`}>{tab.label}</Link>
         ))}
       </nav>
-
       {children}
     </div>
   );
