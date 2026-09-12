@@ -53,11 +53,14 @@ export async function repairOperationalSchema() {
     );
   `);
 
+  // Keep these columns intentionally unbound here: the existing production DB
+  // may have older project/deployment definitions. Application authorization
+  // remains enforced in the application layer.
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS container_instances (
       id text PRIMARY KEY,
-      project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      deployment_id text NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
+      project_id text NOT NULL,
+      deployment_id text NOT NULL,
       driver text NOT NULL,
       host_id text NOT NULL DEFAULT 'local',
       external_id text NOT NULL,
