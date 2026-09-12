@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -9,6 +10,7 @@ import {
   healthCheckResults,
 } from "@/db/schema";
 import { requireProjectAccess } from "@/lib/auth";
+import { freeDomainForProject, syncVercelDeployment } from "@/lib/vercel-hosting";
 import { KeyValue, Panel, Status, bytes, duration, timeAgo } from "@/components/ui";
 import { ActionButton, LogStream } from "@/components/client";
 
@@ -23,12 +25,13 @@ export default async function DeploymentDetail({
 }) {
   const { projectId, deploymentId } = await params;
   const { project, user } = await requireProjectAccess(projectId);
-  const [deployment] = await db
+  let [deployment] = await db
     .select()
     .from(deployments)
     .where(and(eq(deployments.id, deploymentId), eq(deployments.projectId, projectId)))
     .limit(1);
   if (!deployment) notFound();
+  deployment = await syncVercelDeployment(deployment);
 
   const events = await db
     .select()
@@ -54,6 +57,7 @@ export default async function DeploymentDetail({
     .limit(1);
 
   const isProduction = project.currentHealthyDeploymentId === deploymentId;
+  const liveUrl = deployment.url ?? `https://${freeDomainForProject(project)}`;
 
   return (
     <div className="flex flex-col gap-4">
@@ -61,6 +65,12 @@ export default async function DeploymentDetail({
         title={`Deployment #${deployment.number}`}
         actions={
           <div className="flex flex-wrap gap-2">
+            {deployment.status === "PROMOTED" ? (
+              <>
+                <Link className="btn" href={`/projects/${projectId}/preview`}>Preview project</Link>
+                <a className="btn btn-primary" href={liveUrl} target="_blank" rel="noreferrer">Open live ↗</a>
+              </>
+            ) : null}
             {LIVE.includes(deployment.status) ? (
               <ActionButton
                 csrf={user.csrfToken}
@@ -126,9 +136,9 @@ export default async function DeploymentDetail({
               ["Generation", String(deployment.generation)],
               ["Trigger", deployment.triggerSource],
               ["Build duration", duration(deployment.buildStartedAt, deployment.buildEndedAt)],
-              ["Runtime", instance ? `${instance.driver} · port ${instance.port}` : "not running"],
+              ["Runtime", instance ? `${instance.driver} · port ${instance.port}` : deployment.runtimeDriver === "vercel" ? "Vercel" : "not running"],
               ["Artifact", <span key="a" className="mono">{deployment.artifactRef ?? "released"}</span>],
-              ["URL", deployment.url ?? "—"],
+              ["Live URL", <a key="u" href={liveUrl} target="_blank" rel="noreferrer" className="mono">{liveUrl}</a>],
               ...(deployment.errorReason
                 ? ([["Failure", <span key="e" style={{ color: "var(--color-danger)" }}>{deployment.errorReason}</span>]] as [string, React.ReactNode][])
                 : []),
@@ -145,11 +155,7 @@ export default async function DeploymentDetail({
         <Panel title="Events">
           <table className="data">
             <thead>
-              <tr>
-                <th>Event</th>
-                <th>Detail</th>
-                <th>When</th>
-              </tr>
+              <tr><th>Event</th><th>Detail</th><th>When</th></tr>
             </thead>
             <tbody>
               {events.map((e) => (
@@ -166,21 +172,12 @@ export default async function DeploymentDetail({
         <div className="flex flex-col gap-4">
           <Panel title="Health probes">
             <table className="data">
-              <thead>
-                <tr>
-                  <th>Kind</th>
-                  <th>Result</th>
-                  <th>Latency</th>
-                  <th>When</th>
-                </tr>
-              </thead>
+              <thead><tr><th>Kind</th><th>Result</th><th>Latency</th><th>When</th></tr></thead>
               <tbody>
                 {probes.map((p) => (
                   <tr key={p.id}>
                     <td>{p.kind}</td>
-                    <td>
-                      <Status status={p.ok ? "HEALTHY" : "FAILED"} />
-                    </td>
+                    <td><Status status={p.ok ? "HEALTHY" : "FAILED"} /></td>
                     <td className="mono">{p.latencyMs ?? 0}ms</td>
                     <td style={{ color: "var(--color-fg-muted)" }}>{timeAgo(p.checkedAt)}</td>
                   </tr>
@@ -190,25 +187,14 @@ export default async function DeploymentDetail({
           </Panel>
           <Panel title="Artifacts">
             <table className="data">
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>Key</th>
-                  <th>Size</th>
-                  <th>Expires</th>
-                </tr>
-              </thead>
+              <thead><tr><th>Type</th><th>Key</th><th>Size</th><th>Expires</th></tr></thead>
               <tbody>
                 {artifacts.map((a) => (
                   <tr key={a.id}>
                     <td>{a.type}</td>
-                    <td className="mono" style={{ color: "var(--color-fg-secondary)" }}>
-                      {a.storageKey}
-                    </td>
+                    <td className="mono" style={{ color: "var(--color-fg-secondary)" }}>{a.storageKey}</td>
                     <td className="mono">{bytes(Number(a.sizeBytes))}</td>
-                    <td style={{ color: "var(--color-fg-muted)" }}>
-                      {a.deletedAt ? "deleted" : a.expiresAt ? timeAgo(a.expiresAt) : "retained"}
-                    </td>
+                    <td style={{ color: "var(--color-fg-muted)" }}>{a.deletedAt ? "deleted" : a.expiresAt ? timeAgo(a.expiresAt) : "retained"}</td>
                   </tr>
                 ))}
               </tbody>
