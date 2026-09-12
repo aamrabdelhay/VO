@@ -6,23 +6,63 @@ const ALLOWED = new Set(["VERCEL_DEPLOY_TOKEN","VERCEL_DEPLOY_TEAM_ID","NVIDIA_A
 export type SecretMeta = { id: string; key: string; last_four: string | null; updated_at: string };
 export type SecretCheck = { key: string; ok: boolean; status: number | null; message: string };
 
-async function ensureTable() {
-  await db.execute(sql`create table if not exists platform_secrets (id text primary key, key text not null, cipher jsonb not null, last_four text, updated_at timestamptz not null default now(), updated_by text)`);
-  await db.execute(sql`alter table platform_secrets add column if not exists id text`);
-  await db.execute(sql`alter table platform_secrets add column if not exists key text`);
-  await db.execute(sql`alter table platform_secrets add column if not exists cipher jsonb`);
-  await db.execute(sql`alter table platform_secrets add column if not exists last_four text`);
-  await db.execute(sql`alter table platform_secrets add column if not exists updated_at timestamptz not null default now()`);
-  await db.execute(sql`alter table platform_secrets add column if not exists updated_by text`);
-  await db.execute(sql`update platform_secrets set id = md5(random()::text || clock_timestamp()::text) where id is null or id = ''`);
-  await db.execute(sql`update platform_secrets set key = '' where key is null`);
-  await db.execute(sql`alter table platform_secrets alter column id set not null`);
-  await db.execute(sql`alter table platform_secrets alter column key set not null`);
-  const constraints = await db.execute<{ constraint_name: string }>(sql`select constraint_name from information_schema.table_constraints where table_schema=current_schema() and table_name='platform_secrets' and constraint_type='PRIMARY KEY'`);
-  for (const row of constraints.rows ?? []) await db.execute(sql.raw(`alter table platform_secrets drop constraint if exists "${row.constraint_name.replaceAll('"','""')}"`));
-  await db.execute(sql`alter table platform_secrets add constraint platform_secrets_pkey primary key (id)`);
-  await db.execute(sql`create index if not exists platform_secrets_key_idx on platform_secrets(key)`);
+let tableReady: Promise<void> | null = null;
+
+async function migratePlatformSecrets() {
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('vo.platform_secrets', 0))`);
+    await tx.execute(sql`create table if not exists platform_secrets (id text, key text not null, cipher jsonb not null, last_four text, updated_at timestamptz not null default now(), updated_by text)`);
+    await tx.execute(sql`alter table platform_secrets add column if not exists id text`);
+    await tx.execute(sql`alter table platform_secrets add column if not exists key text`);
+    await tx.execute(sql`alter table platform_secrets add column if not exists cipher jsonb`);
+    await tx.execute(sql`alter table platform_secrets add column if not exists last_four text`);
+    await tx.execute(sql`alter table platform_secrets add column if not exists updated_at timestamptz not null default now()`);
+    await tx.execute(sql`alter table platform_secrets add column if not exists updated_by text`);
+    await tx.execute(sql`update platform_secrets set id = md5(random()::text || clock_timestamp()::text) where id is null or id = ''`);
+    await tx.execute(sql`update platform_secrets set key = '' where key is null`);
+    await tx.execute(sql`alter table platform_secrets alter column id set not null`);
+    await tx.execute(sql`alter table platform_secrets alter column key set not null`);
+
+    const primaryKey = await tx.execute<{ constraint_name: string }>(sql`
+      select constraint_name
+      from information_schema.table_constraints
+      where table_schema=current_schema() and table_name='platform_secrets' and constraint_type='PRIMARY KEY'
+      limit 1
+    `);
+
+    if (!primaryKey.rows?.length) {
+      await tx.execute(sql`alter table platform_secrets add constraint platform_secrets_pkey primary key (id)`);
+    } else {
+      const current = await tx.execute<{ columns: string | null }>(sql`
+        select string_agg(a.attname, ',' order by x.ordinality) as columns
+        from pg_constraint c
+        cross join lateral unnest(c.conkey) with ordinality as x(attnum, ordinality)
+        join pg_class t on t.oid=c.conrelid
+        join pg_attribute a on a.attrelid=t.oid and a.attnum=x.attnum
+        where c.contype='p' and t.relname='platform_secrets' and t.relnamespace=current_schema()::regnamespace
+      `);
+
+      if (current.rows?.[0]?.columns !== 'id') {
+        const constraintName = primaryKey.rows[0].constraint_name.replaceAll('"', '""');
+        await tx.execute(sql.raw(`alter table platform_secrets drop constraint if exists "${constraintName}"`));
+        await tx.execute(sql`alter table platform_secrets add constraint platform_secrets_pkey primary key (id)`);
+      }
+    }
+
+    await tx.execute(sql`create index if not exists platform_secrets_key_idx on platform_secrets(key)`);
+  });
 }
+
+async function ensureTable() {
+  if (!tableReady) {
+    tableReady = migratePlatformSecrets().catch((error) => {
+      tableReady = null;
+      throw error;
+    });
+  }
+  return tableReady;
+}
+
 function assertAllowed(key: string) { if (!ALLOWED.has(key)) throw new Error(`Unsupported platform secret: ${key}`); }
 export function isPlatformSecretKey(key: string) { return ALLOWED.has(key); }
 
