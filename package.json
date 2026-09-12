@@ -14,6 +14,7 @@
   "dependencies": {
     "@livekit/components-react": "2.9.24",
     "@livekit/components-styles": "2.9.24",
+    "@livekit/protocol": "1.51.0",
     "dotenv": "17.3.1",
     "drizzle-orm": "0.45.2",
     "livekit-client": "2.22.3",
