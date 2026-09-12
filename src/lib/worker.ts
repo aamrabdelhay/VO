@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { and, eq } from "drizzle-orm";
+import { db } from "@/db";
+import { deployments, projects } from "@/db/schema";
 import { runAllCleanup } from "@/lib/cleanup";
 import {
   drainDeployment,
@@ -12,10 +15,38 @@ import { claimNextJob, completeJob, enqueue, failJob, recoverStaleJobs, type Job
 import { collectMetrics, reconcile } from "@/lib/reconciler";
 import { processWebhook } from "@/lib/webhooks";
 import { verifyDomain } from "@/lib/domains";
+import { shouldUseVercelHosting, startVercelDeployment } from "@/lib/vercel-hosting";
+import { transition } from "@/lib/state-machine";
 
 const WORKER_ID = `${process.env.PLATFORM_HOST_ID ?? "local"}-${randomUUID().slice(0, 8)}`;
 
 type Handler = (payload: Record<string, unknown>, job: JobRecord) => Promise<unknown>;
+
+async function runDeploymentJob(deploymentId: string) {
+  if (!shouldUseVercelHosting()) return runDeploymentPipeline(deploymentId);
+  const [deployment] = await db.select().from(deployments).where(eq(deployments.id, deploymentId)).limit(1);
+  if (!deployment) throw new Error("Deployment not found");
+  const [project] = await db.select().from(projects).where(eq(projects.id, deployment.projectId)).limit(1);
+  if (!project) throw new Error("Project not found");
+  if (deployment.status !== "QUEUED") return { ok: false, reason: `deployment already ${deployment.status}` };
+  try {
+    await transition(
+      deployment.id,
+      "BUILDING",
+      { buildStartedAt: new Date() },
+      { event: "VERCEL_BUILD_STARTED", message: "Deployment handed to Vercel hosting" },
+    );
+    return await startVercelDeployment(project, { ...deployment, status: "BUILDING" });
+  } catch (error) {
+    await transition(
+      deployment.id,
+      "FAILED",
+      { finishedAt: new Date(), errorReason: error instanceof Error ? error.message : String(error) },
+      { event: "VERCEL_HANDOFF_FAILED", message: error instanceof Error ? error.message : String(error) },
+    );
+    throw error;
+  }
+}
 
 export const handlers: Record<string, Handler> = {
   deploy: async (payload) => {
@@ -23,9 +54,9 @@ export const handlers: Record<string, Handler> = {
       await drainDeployment(String(payload.deploymentId));
       return { drained: payload.deploymentId };
     }
-    return runDeploymentPipeline(String(payload.deploymentId));
+    return runDeploymentJob(String(payload.deploymentId));
   },
-  build: async (payload) => runDeploymentPipeline(String(payload.deploymentId)),
+  build: async (payload) => runDeploymentJob(String(payload.deploymentId)),
   "post-promotion-monitor": async (payload) =>
     monitorAfterPromotion(String(payload.deploymentId), Number(payload.until)),
   "preview-expire": async (payload) =>
@@ -65,7 +96,6 @@ export async function runOneJob(): Promise<boolean> {
   return true;
 }
 
-/** Drains the queue; safe to call from the scheduler loop or an admin endpoint. */
 export async function drainQueue(maxJobs = 5) {
   let processed = 0;
   while (processed < maxJobs) {
