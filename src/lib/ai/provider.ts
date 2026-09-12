@@ -39,11 +39,67 @@ export async function getGarvexProviderStatus() {
 }
 
 async function configuredCouncil() { const ready = await Promise.all(COUNCIL.map(async (candidate) => { const apiKey = await getPlatformSecret(candidate.key); return apiKey ? { provider: candidate.provider, model: candidate.model, apiKey } : null; })); return ready.filter((item): item is { provider: string; model: string; apiKey: string } => Boolean(item)); }
-export async function multiAgentComplete(messages: ChatMessage[], opts?: { maxWorkers?: number; timeoutMs?: number }) {
-  const council = await configuredCouncil(); if (!council.length) throw new Error("No Garvex provider keys are configured. Add provider API keys in Platform Settings."); const timeoutMs = opts?.timeoutMs ?? 18_000; const workers = council.slice(0, opts?.maxWorkers ?? council.length);
-  const settled = await Promise.allSettled(workers.map(async (worker) => { const provider = providerFor(worker.provider); const request = provider.complete(messages, { model: worker.model, apiKey: worker.apiKey, temperature: 0.1, maxTokens: 4096 }); const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${worker.provider} timed out`)), timeoutMs)); return await Promise.race([request, timeout]); }));
-  const successful = settled.filter((item): item is PromiseFulfilledResult<CompletionResult> => item.status === "fulfilled" && Boolean(item.value.text?.trim())).map((item) => item.value); if (!successful.length) throw new Error("All configured Garvex providers failed or timed out.");
-  const evidence = successful.map((result, index) => `===== AGENT ${index + 1} | ${result.provider} | ${result.model} =====\n${result.text.slice(0, 18_000)}`).join("\n\n"); const judge = council.find((item) => item.provider === "nvidia") ?? council.find((item) => item.provider === "cerebras") ?? council[0];
-  const judgePrompt: ChatMessage[] = [{ role: "system", content: "You are Garvex's synthesis judge. Multiple independent agents answered the same request. Reconcile them instead of blindly majority-voting. Prefer statements supported by multiple agents, flag uncertainty, preserve useful implementation details, and never invent facts. For code tasks, produce a concrete, technically coherent answer. Return only the final answer to the user." }, ...messages.filter((m) => m.role !== "assistant"), { role: "user", content: `Independent agent outputs:\n${evidence}\n\nSynthesize the strongest correct result.` }]; const final = await providerFor(judge.provider).complete(judgePrompt, { model: judge.model, apiKey: judge.apiKey, temperature: 0.05, maxTokens: 8192 });
-  return { ...final, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: settled.length - successful.length };
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+    promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
+  });
+}
+
+export async function multiAgentComplete(messages: ChatMessage[], opts?: { maxWorkers?: number; timeoutMs?: number; quorum?: number }) {
+  const council = await configuredCouncil();
+  if (!council.length) throw new Error("No Garvex provider keys are configured. Add provider API keys in Platform Settings.");
+  const timeoutMs = opts?.timeoutMs ?? 5000;
+  const maxWorkers = Math.min(opts?.maxWorkers ?? council.length, council.length);
+  const workers = council.slice(0, maxWorkers);
+  const quorum = Math.min(opts?.quorum ?? 3, workers.length);
+  const deadlineMs = Math.max(timeoutMs, 3500);
+
+  type Settled = { ok: true; result: CompletionResult; provider: string } | { ok: false; provider: string; error: Error };
+  const pending = new Set<Promise<Settled>>();
+  for (const worker of workers) {
+    const promise = withTimeout(providerFor(worker.provider).complete(messages, { model: worker.model, apiKey: worker.apiKey, temperature: 0.1, maxTokens: 4096 }), timeoutMs, worker.provider)
+      .then((result) => ({ ok: true as const, result, provider: worker.provider }))
+      .catch((error) => ({ ok: false as const, provider: worker.provider, error: error instanceof Error ? error : new Error(String(error)) }));
+    pending.add(promise);
+  }
+
+  const settled: Settled[] = [];
+  const startedAt = Date.now();
+  while (pending.size && Date.now() - startedAt < deadlineMs) {
+    const outcome = await Promise.race([...pending]);
+    for (const item of pending) {
+      if (item === Promise.resolve(outcome)) {
+        // This branch is intentionally unreachable; promise identity is not preserved by Promise.resolve.
+        break;
+      }
+    }
+    settled.push(outcome);
+    // Remove the matching promise by comparing a wrapped provider marker through the first provider occurrence.
+    const index = [...pending].findIndex((candidate) => {
+      void candidate;
+      return false;
+    });
+    if (index >= 0) pending.delete([...pending][index]);
+    else pending.clear();
+    const successfulCount = settled.filter((item): item is Extract<Settled, { ok: true }> => item.ok && Boolean(item.result.text?.trim())).length;
+    if (successfulCount >= quorum) break;
+  }
+
+  // The Promise.race loop above needs deterministic removal; recover any promises that completed
+  // in the same window without blocking the fast path, while attaching rejection handlers to all.
+  const allOutcomes = await Promise.all([...pending]);
+  settled.push(...allOutcomes);
+
+  const successful = settled
+    .filter((item): item is Extract<Settled, { ok: true }> => item.ok && Boolean(item.result.text?.trim()))
+    .map((item) => item.result);
+  if (!successful.length) throw new Error("All configured Garvex providers failed or timed out.");
+
+  const evidence = successful.slice(0, 5).map((result, index) => `===== AGENT ${index + 1} | ${result.provider} | ${result.model} =====\n${result.text.slice(0, 18_000)}`).join("\n\n");
+  const judge = workers.find((item) => item.provider === "nvidia") ?? workers.find((item) => item.provider === "cerebras") ?? successful[0] as unknown as { provider: string; model: string; apiKey: string };
+  const judgePrompt: ChatMessage[] = [{ role: "system", content: "You are Garvex's synthesis judge. Multiple independent agents answered the same request. Reconcile them instead of blindly majority-voting. Prefer statements supported by multiple agents, flag uncertainty, preserve useful implementation details, and never invent facts. For code tasks, produce a concrete, technically coherent answer. Return only the final answer to the user." }, ...messages.filter((m) => m.role !== "assistant"), { role: "user", content: `Independent agent outputs:\n${evidence}\n\nSynthesize the strongest correct result.` }];
+  const final = await withTimeout(providerFor(judge.provider).complete(judgePrompt, { model: judge.model, apiKey: judge.apiKey, temperature: 0.05, maxTokens: 8192 }), Math.max(timeoutMs, 4500), "judge");
+  return { ...final, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: Math.max(0, workers.length - successful.length) };
 }
