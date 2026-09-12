@@ -66,13 +66,23 @@ export async function POST(request: Request) {
     const token = await installationToken(membership.org.id);
     const repo = await getRepo(body.repoFullName, token);
 
-    const slug = `${body.name}`
+    const baseSlug = `${body.name}`
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "")
       .slice(0, 40);
-    const uniqueSlug = `${slug || "project"}-${randomToken(3).toLowerCase().replace(/[^a-z0-9]/g, "")}`;
-    const freeDomain = normalizeFreeDomain(body.freeDomain || body.name, uniqueSlug).slice(0, 63);
+    let uniqueSlug = `${baseSlug || "project"}-${randomToken(3).toLowerCase().replace(/[^a-z0-9]/g, "")}`;
+    let freeDomain = normalizeFreeDomain(body.freeDomain || body.name, uniqueSlug).slice(0, 63);
+
+    // The database has a global unique index. Preflight it so identical names do not
+    // make the UI fail just because another project already owns the requested URL.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const [existing] = await db.select({ id: projects.id }).from(projects).where(eq(projects.freeDomain, freeDomain)).limit(1);
+      if (!existing) break;
+      const suffix = randomToken(4).toLowerCase().replace(/[^a-z0-9]/g, "");
+      freeDomain = `${normalizeFreeDomain(body.freeDomain || body.name, baseSlug || "project")}-${suffix}`.slice(0, 63);
+    }
+    if (!freeDomain) freeDomain = uniqueSlug;
 
     const [project] = await db
       .insert(projects)
