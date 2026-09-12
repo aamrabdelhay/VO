@@ -1,4 +1,4 @@
-import { Agent, AgentSession, AgentSessionEventTypes, ServerOptions, cli, defineAgent, log } from "@livekit/agents";
+import { Agent, AgentSession, ServerOptions, cli, defineAgent, inference } from "@livekit/agents";
 import * as openai from "@livekit/agents-plugin-openai";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
@@ -13,64 +13,52 @@ const agent = new Agent({
   ].join("\n"),
 });
 
-function makeTts() {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) throw new Error("OPENROUTER_API_KEY is required by the realtime agent.");
-
-  return new openai.TTS({
-    apiKey,
-    baseURL: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
-    model: process.env.GARVEX_REALTIME_TTS_MODEL || "deepgram/flux-tts:free",
-    voice: process.env.GARVEX_REALTIME_TTS_VOICE || "flux-alexis-en",
-  });
-}
-
 export default defineAgent({
   entry: async (ctx) => {
     await ctx.connect();
 
-    const stt = openai.STT.withGroq({
-      apiKey: process.env.GROQ_API_KEY,
-      model: process.env.GARVEX_REALTIME_STT_MODEL || "whisper-large-v3-turbo",
-    });
-
-    const llm = openai.LLM.withGroq({
-      apiKey: process.env.GROQ_API_KEY,
-      model: process.env.GARVEX_REALTIME_LLM_MODEL || "openai/gpt-oss-120b",
-      temperature: 0.1,
-    });
+    const groqKey = process.env.GROQ_API_KEY;
+    const openRouterKey = process.env.OPENROUTER_API_KEY;
+    if (!groqKey) throw new Error("GROQ_API_KEY is required by the realtime agent.");
+    if (!openRouterKey) throw new Error("OPENROUTER_API_KEY is required by the realtime agent.");
 
     const session = new AgentSession({
-      stt,
-      llm,
-      tts: makeTts(),
+      stt: openai.STT.withGroq({
+        apiKey: groqKey,
+        model: process.env.GARVEX_REALTIME_STT_MODEL || "whisper-large-v3-turbo",
+      }),
+      llm: openai.LLM.withGroq({
+        apiKey: groqKey,
+        model: process.env.GARVEX_REALTIME_LLM_MODEL || "openai/gpt-oss-120b",
+        temperature: 0.1,
+      }),
+      tts: new openai.TTS({
+        apiKey: openRouterKey,
+        baseURL: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
+        model: process.env.GARVEX_REALTIME_TTS_MODEL || "deepgram/flux-tts:free",
+        voice: process.env.GARVEX_REALTIME_TTS_VOICE || "flux-alexis-en",
+      }),
       turnHandling: {
-        interruption: {
-          resumeFalseInterruption: true,
-          falseInterruptionTimeout: 1000,
-          mode: "adaptive",
-        },
+        turnDetection: new inference.TurnDetector(),
         endpointing: {
-          mode: "dynamic",
           minDelay: 250,
           maxDelay: 1800,
         },
+        interruption: {
+          mode: "adaptive",
+          minDuration: 350,
+          minWords: 0,
+          resumeFalseInterruption: true,
+          falseInterruptionTimeout: 1200,
+        },
+        preemptiveGeneration: {
+          enabled: true,
+          preemptiveTts: true,
+          maxSpeechDuration: 10000,
+          maxRetries: 3,
+        },
       },
-      preemptiveGeneration: {
-        enabled: true,
-      },
-    });
-
-    session.on(AgentSessionEventTypes.Error, (event) => {
-      log.error({ error: event.error }, "Garvex realtime session error");
-    });
-
-    session.on(AgentSessionEventTypes.UserInputTranscribed, (event) => {
-      log.debug({ text: event.transcript, final: event.isFinal }, "Garvex STT");
-    });
-
-    session.on(AgentSessionEventTypes.OverlappingSpeech, () => {
-      log.debug("Garvex interruption detected; active speech will be interrupted");
+      ttsTextTransforms: ["filter_markdown", "filter_emoji"],
     });
 
     await session.start({
@@ -81,8 +69,15 @@ export default defineAgent({
       },
     });
 
-    await session.say("أهلاً، أنا Garvex. أنا معاك دلوقتي لايف.", { allowInterruptions: true });
+    await session.generateReply({
+      instructions: "Greet the user briefly in English, then invite them to speak.",
+    });
   },
 });
 
-cli.runApp(new ServerOptions({ agent: fileURLToPath(import.meta.url) }));
+cli.runApp(
+  new ServerOptions({
+    agent: fileURLToPath(import.meta.url),
+    agentName: process.env.GARVEX_REALTIME_AGENT_NAME || "garvex-realtime",
+  }),
+);
