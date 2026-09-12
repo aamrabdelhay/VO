@@ -38,31 +38,24 @@ async function ensureTable() {
   await db.execute(sql`alter table platform_secrets add column if not exists last_four text`);
   await db.execute(sql`alter table platform_secrets add column if not exists updated_at timestamptz not null default now()`);
   await db.execute(sql`alter table platform_secrets add column if not exists updated_by text`);
-  const pk = await db.execute<{ constraint_name: string }>(sql`
-    select constraint_name
-    from information_schema.table_constraints
-    where table_name = 'platform_secrets' and constraint_type = 'PRIMARY KEY'
-    limit 1
-  `);
-  const pkName = pk.rows?.[0]?.constraint_name;
-  if (pkName && pkName !== "platform_secrets_pkey") {
-    await db.execute(sql.raw(`alter table platform_secrets drop constraint if exists "${pkName.replaceAll('"', '""')}"`));
-  }
   await db.execute(sql`update platform_secrets set id = md5(random()::text || clock_timestamp()::text) where id is null or id = ''`);
   await db.execute(sql`update platform_secrets set key = '' where key is null`);
   await db.execute(sql`alter table platform_secrets alter column id set not null`);
   await db.execute(sql`alter table platform_secrets alter column key set not null`);
-  await db.execute(sql`create unique index if not exists platform_secrets_id_uq on platform_secrets(id)`);
+
+  const constraints = await db.execute<{ constraint_name: string }>(sql`
+    select constraint_name from information_schema.table_constraints
+    where table_schema = current_schema() and table_name = 'platform_secrets' and constraint_type = 'PRIMARY KEY'
+  `);
+  for (const row of constraints.rows ?? []) {
+    await db.execute(sql.raw(`alter table platform_secrets drop constraint if exists "${row.constraint_name.replaceAll('"', '""')}"`));
+  }
+  await db.execute(sql`alter table platform_secrets add constraint platform_secrets_pkey primary key (id)`);
   await db.execute(sql`create index if not exists platform_secrets_key_idx on platform_secrets(key)`);
 }
 
-function assertAllowed(key: string) {
-  if (!ALLOWED.has(key)) throw new Error(`Unsupported platform secret: ${key}`);
-}
-
-export function isPlatformSecretKey(key: string) {
-  return ALLOWED.has(key);
-}
+function assertAllowed(key: string) { if (!ALLOWED.has(key)) throw new Error(`Unsupported platform secret: ${key}`); }
+export function isPlatformSecretKey(key: string) { return ALLOWED.has(key); }
 
 export async function setPlatformSecret(key: string, value: string, userId: string) {
   assertAllowed(key);
@@ -87,9 +80,7 @@ export async function getPlatformSecret(key: string): Promise<string | null> {
 export async function getPlatformSecretValues(key: string): Promise<{ id: string; value: string }[]> {
   assertAllowed(key);
   await ensureTable();
-  const result = await db.execute<{ id: string; cipher: unknown }>(sql`
-    select id, cipher from platform_secrets where key = ${key} order by updated_at asc
-  `);
+  const result = await db.execute<{ id: string; cipher: unknown }>(sql`select id, cipher from platform_secrets where key = ${key} order by updated_at asc`);
   return (result.rows ?? []).flatMap((row) => {
     try { return row.cipher ? [{ id: row.id, value: decryptSecret(row.cipher) }] : []; } catch { return []; }
   });
@@ -106,9 +97,7 @@ export async function getPlatformSecretById(id: string) {
 
 export async function listPlatformSecretMetadata(): Promise<SecretMeta[]> {
   await ensureTable();
-  const result = await db.execute<SecretMeta>(sql`
-    select id, key, last_four, updated_at from platform_secrets order by key, updated_at
-  `);
+  const result = await db.execute<SecretMeta>(sql`select id, key, last_four, updated_at from platform_secrets order by key, updated_at`);
   return result.rows ?? [];
 }
 
@@ -117,9 +106,7 @@ export async function deletePlatformSecret(id: string) {
   await db.execute(sql`delete from platform_secrets where id = ${id}`);
 }
 
-function bearerHeaders(value: string) {
-  return { accept: "application/json", authorization: `Bearer ${value}`, "user-agent": "vo-platform" };
-}
+function bearerHeaders(value: string) { return { accept: "application/json", authorization: `Bearer ${value}`, "user-agent": "vo-platform" }; }
 
 async function checkResponse(key: string, response: Response, fallback: string): Promise<SecretCheck> {
   if (response.ok) return { key, ok: true, status: response.status, message: "Connected" };
