@@ -71,13 +71,14 @@ export async function multiAgentComplete(messages: ChatMessage[], opts?: { maxWo
   const workers = candidates.slice(0, maxWorkers);
   const pending = workers.map((worker, index) => withTimeout(providerFor(worker.provider).complete(messages, { model: worker.model, apiKey: worker.apiKey, temperature: 0.1, maxTokens: 4096 }), timeoutMs, worker.provider).then((result) => ({ index, result })).catch((error) => ({ index, error: error instanceof Error ? error : new Error(String(error)) })));
   const outcomes = await Promise.all(pending);
-  const successful = outcomes.filter((item): item is { index: number; result: CompletionResult } => "result" in item && Boolean(item.result.text?.trim())).map((item) => item.result);
+  const successfulWithCandidates = outcomes.filter((item): item is { index: number; result: CompletionResult } => "result" in item && Boolean(item.result.text?.trim())).map((item) => ({ candidate: workers[item.index], result: item.result }));
+  const successful = successfulWithCandidates.map((item) => item.result);
   if (!successful.length) throw new Error("All configured Garvex providers failed or timed out.");
   const evidence = successful.slice(0, 7).map((result, index) => `===== AGENT ${index + 1} | ${result.provider} | ${result.model} =====\n${result.text.slice(0, 16000)}`).join("\n\n");
-  const judge = successful[0];
+  const judgeCandidate = successfulWithCandidates[0].candidate;
   const judgePrompt: ChatMessage[] = [{ role: "system", content: "You are Garvex's synthesis judge. Reconcile independent agent outputs. Prefer evidence-supported conclusions, flag uncertainty, preserve concrete technical details, and never invent actions or facts. Return only the final answer." }, ...messages.filter((m) => m.role !== "assistant"), { role: "user", content: `Independent agent outputs:\n${evidence}\n\nSynthesize the strongest correct result.` }];
   try {
-    const final = await withTimeout(providerFor(judge.provider).complete(judgePrompt, { model: judge.model, apiKey: judge.apiKey, temperature: 0.05, maxTokens: 8192 }), Math.max(3000, Math.min(timeoutMs, 3500)), "judge");
+    const final = await withTimeout(providerFor(judgeCandidate.provider).complete(judgePrompt, { model: judgeCandidate.model, apiKey: judgeCandidate.apiKey, temperature: 0.05, maxTokens: 8192 }), Math.max(3000, Math.min(timeoutMs, 3500)), "judge");
     return { ...final, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: workers.length - successful.length, strategy: "complex" as const };
   } catch {
     const fallback = successful[0];
