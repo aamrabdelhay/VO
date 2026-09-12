@@ -29,7 +29,9 @@ export async function POST(request: Request) {
       { role: "system", content: system },
       { role: "user", content: `${prompt}${body.context ? `\n\nContext:\n${body.context.slice(0, 30000)}` : ""}` },
     ];
-    const result = await multiAgentComplete(messages, { timeoutMs: 15000 });
+    // Keep the council parallel but latency-sensitive: slower workers are isolated
+    // and the overall request is bounded so the UI does not feel stuck.
+    const result = await multiAgentComplete(messages, { timeoutMs: 7000, maxWorkers: 7 });
     return ok({ answer: result.text, provider: result.provider, model: result.model, workers: result.workers, failedWorkers: result.failedWorkers });
   });
 }
