@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 const PRESETS = [
   { key: "VERCEL_DEPLOY_TOKEN", label: "Vercel Deploy Token", hint: "Used by VO to create deployments and aliases on Vercel." },
   { key: "VERCEL_DEPLOY_TEAM_ID", label: "Vercel Team ID", hint: "Your Vercel team identifier; it is not a secret but is kept here with the hosting configuration." },
+  { key: "GITHUB_TOKEN", label: "GitHub Personal Access Token", hint: "Lets Garvex use GitHub API actions for repository inspection and future engineering tools." },
   { key: "NVIDIA_API_KEY", label: "NVIDIA API Key", hint: "DeepSeek V4 Flash free endpoint for Garvex and the existing AI editor." },
   { key: "OPENROUTER_API_KEY", label: "OpenRouter API Key", hint: "Multi-model gateway and free-model pool." },
   { key: "MISTRAL_API_KEY", label: "Mistral API Key", hint: "Fast text/coding model provider; free mode has usage limits." },
@@ -55,7 +56,7 @@ export function PlatformSecretsForm({ csrf, initial = [] }: { csrf: string; init
           <input
             id="platform-secret-search"
             className="input mono"
-            placeholder="Search provider secret…"
+            placeholder="Search provider or GitHub secret…"
             value={search}
             onChange={(event) => setSearch(event.target.value.toUpperCase())}
           />
