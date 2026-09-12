@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { deployments, projects } from "@/db/schema";
 import { runAllCleanup } from "@/lib/cleanup";
