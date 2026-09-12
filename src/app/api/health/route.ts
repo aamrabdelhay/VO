@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
+import { repairOperationalSchema } from "@/db/repair";
 import { containerInstances, jobs } from "@/db/schema";
 import { getRuntimeDriver } from "@/lib/runtime";
 
@@ -13,6 +14,14 @@ export async function GET() {
   } catch (error) {
     checks.database = { ok: false, detail: String(error) };
   }
+
+  try {
+    await repairOperationalSchema();
+    checks.schema = { ok: true };
+  } catch (error) {
+    checks.schema = { ok: false, detail: String(error) };
+  }
+
   try {
     const [row] = await db
       .select({ queued: sql<number>`count(*) filter (where status = 'QUEUED')` })
