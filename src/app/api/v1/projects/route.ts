@@ -7,6 +7,7 @@ import { audit } from "@/lib/audit";
 import { encryptSecret, randomToken } from "@/lib/crypto";
 import { getRepo } from "@/lib/github";
 import { installationToken } from "@/lib/github-auth";
+import { normalizeFreeDomain } from "@/lib/vercel-hosting";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +39,7 @@ export async function GET() {
 type CreateBody = {
   name: string;
   repoFullName: string;
+  freeDomain?: string;
   productionBranch?: string;
   rootDirectory?: string;
   installCommand?: string;
@@ -70,6 +72,7 @@ export async function POST(request: Request) {
       .replace(/^-|-$/g, "")
       .slice(0, 40);
     const uniqueSlug = `${slug || "project"}-${randomToken(3).toLowerCase().replace(/[^a-z0-9]/g, "")}`;
+    const freeDomain = normalizeFreeDomain(body.freeDomain || body.name, uniqueSlug).slice(0, 63);
 
     const [project] = await db
       .insert(projects)
@@ -77,6 +80,7 @@ export async function POST(request: Request) {
         orgId: membership.org.id,
         name: body.name,
         slug: uniqueSlug,
+        freeDomain,
         repoFullName: repo.full_name,
         repoUrl: repo.html_url,
         productionBranch: body.productionBranch || repo.default_branch || "main",
@@ -98,7 +102,7 @@ export async function POST(request: Request) {
       action: "project.created",
       resourceType: "project",
       resourceId: project.id,
-      newState: { repo: repo.full_name, branch: project.productionBranch },
+      newState: { repo: repo.full_name, branch: project.productionBranch, freeDomain },
     });
     return ok({ project });
   });
