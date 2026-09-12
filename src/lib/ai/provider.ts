@@ -2,7 +2,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { aiConfigs, aiMessages } from "@/db/schema";
 import { decryptSecret } from "@/lib/crypto";
-import { getPlatformSecret } from "@/lib/platform-secrets";
+import { getPlatformSecret, getPlatformSecretValues } from "@/lib/platform-secrets";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 export type CompletionResult = { text: string; tokensIn: number; tokensOut: number; costCents: number; provider: string; model: string };
@@ -15,10 +15,8 @@ class AnthropicProvider implements AIProvider { readonly name = "anthropic"; asy
 class OpenAICompatibleProvider implements AIProvider { constructor(readonly name: string, private readonly defaultBase: string) {} async complete(messages: ChatMessage[], opts: ProviderOptions) { const res = await fetch(`${(opts.baseUrl ?? this.defaultBase).replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` }, body: JSON.stringify({ model: opts.model, temperature: opts.temperature, max_tokens: opts.maxTokens, messages }) }); if (!res.ok) throw new Error(`${this.name} request failed (${res.status}): ${await res.text()}`); const data = (await res.json()) as { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } }; const tokensIn = data.usage?.prompt_tokens ?? 0; const tokensOut = data.usage?.completion_tokens ?? 0; return { text: data.choices?.[0]?.message?.content ?? "", tokensIn, tokensOut, costCents: estimateCost(tokensIn, tokensOut), provider: this.name, model: opts.model }; } }
 class GeminiProvider implements AIProvider { readonly name = "gemini"; async complete(messages: ChatMessage[], opts: ProviderOptions) { const base = opts.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta"; const res = await fetch(`${base}/models/${opts.model}:generateContent?key=${opts.apiKey}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ contents: messages.filter((m) => m.role !== "system").map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })), systemInstruction: { parts: [{ text: messages.filter((m) => m.role === "system").map((m) => m.content).join("\n") }] }, generationConfig: { temperature: opts.temperature, maxOutputTokens: opts.maxTokens } }) }); if (!res.ok) throw new Error(`Gemini request failed (${res.status}): ${await res.text()}`); const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[]; usageMetadata?: { promptTokenCount: number; candidatesTokenCount: number } }; const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? ""; const tokensIn = data.usageMetadata?.promptTokenCount ?? 0; const tokensOut = data.usageMetadata?.candidatesTokenCount ?? 0; return { text, tokensIn, tokensOut, costCents: estimateCost(tokensIn, tokensOut), provider: this.name, model: opts.model }; } }
 class CohereProvider implements AIProvider { readonly name = "cohere"; async complete(messages: ChatMessage[], opts: ProviderOptions) { const res = await fetch(`${opts.baseUrl ?? "https://api.cohere.com/v2"}/chat`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` }, body: JSON.stringify({ model: opts.model, messages, temperature: opts.temperature, max_tokens: opts.maxTokens }) }); if (!res.ok) throw new Error(`Cohere request failed (${res.status}): ${await res.text()}`); const data = (await res.json()) as { message?: { content?: { type: string; text?: string }[] }; usage?: { tokens?: { input_tokens?: number; output_tokens?: number } } }; const text = data.message?.content?.map((part) => part.text ?? "").join("") ?? ""; const tokensIn = data.usage?.tokens?.input_tokens ?? 0; const tokensOut = data.usage?.tokens?.output_tokens ?? 0; return { text, tokensIn, tokensOut, costCents: estimateCost(tokensIn, tokensOut), provider: this.name, model: opts.model }; } }
-
 export function providerFor(name: string): AIProvider { switch (name) { case "anthropic": return new AnthropicProvider(); case "gemini": return new GeminiProvider(); case "cohere": return new CohereProvider(); case "openai": return new OpenAICompatibleProvider("openai", "https://api.openai.com/v1"); case "nvidia": return new OpenAICompatibleProvider("nvidia", "https://integrate.api.nvidia.com/v1"); case "openrouter": return new OpenAICompatibleProvider("openrouter", "https://openrouter.ai/api/v1"); case "mistral": return new OpenAICompatibleProvider("mistral", "https://api.mistral.ai/v1"); case "cerebras": return new OpenAICompatibleProvider("cerebras", "https://api.cerebras.ai/v1"); case "groq": return new OpenAICompatibleProvider("groq", "https://api.groq.com/openai/v1"); case "kilo": return new OpenAICompatibleProvider("kilo", "https://api.kilo.ai/api/gateway"); default: return new OpenAICompatibleProvider(name, "https://api.openai.com/v1"); } }
 export type ResolvedAIConfig = ProviderOptions & { provider: string; dailyBudgetCents: number };
-
 export async function resolveAIConfig(orgId: string): Promise<ResolvedAIConfig | null> { const [config] = await db.select().from(aiConfigs).where(eq(aiConfigs.orgId, orgId)).limit(1); if (config) { let apiKey: string | null = null; if (config.apiKeyCipher) { try { apiKey = decryptSecret(config.apiKeyCipher); } catch { apiKey = null; } } apiKey = apiKey ?? envKeyFor(config.provider); if (!apiKey) return null; return { provider: config.provider, model: config.model, apiKey, baseUrl: config.baseUrl, temperature: config.temperature, maxTokens: config.maxTokens, dailyBudgetCents: config.dailyBudgetCents }; } const provider = process.env.AI_PROVIDER ?? "anthropic"; const apiKey = envKeyFor(provider); if (!apiKey) return null; return { provider, model: process.env.AI_MODEL ?? defaultModel(provider), apiKey, baseUrl: process.env.AI_BASE_URL ?? null, temperature: 0.1, maxTokens: 4096, dailyBudgetCents: 500 }; }
 function envKeyFor(provider: string) { if (provider === "anthropic") return process.env.ANTHROPIC_API_KEY ?? null; if (provider === "openai") return process.env.OPENAI_API_KEY ?? null; if (provider === "gemini") return process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? null; return process.env.AI_API_KEY ?? null; }
 function defaultModel(provider: string) { if (provider === "anthropic") return "claude-sonnet-4-5"; if (provider === "openai") return "gpt-4o-mini"; if (provider === "gemini") return "gemini-2.0-flash"; return "gpt-4o-mini"; }
@@ -34,65 +32,55 @@ const COUNCIL: { provider: string; key: string; model: string }[] = [
   { provider: "cohere", key: "COHERE_API_KEY", model: "command-a" },
 ];
 
+type Candidate = { provider: string; model: string; apiKey: string; credentialId: string };
+function shuffle<T>(items: T[]): T[] { const copy = [...items]; for (let i = copy.length - 1; i > 0; i -= 1) { const j = Math.floor(Math.random() * (i + 1)); [copy[i], copy[j]] = [copy[j], copy[i]]; } return copy; }
+
+async function configuredCouncil(): Promise<Candidate[]> {
+  const groups = await Promise.all(COUNCIL.map(async (candidate) => {
+    const keys = await getPlatformSecretValues(candidate.key);
+    return keys.map((entry) => ({ provider: candidate.provider, model: candidate.model, apiKey: entry.value, credentialId: entry.id }));
+  }));
+  return shuffle(groups.flat());
+}
+
 export async function getGarvexProviderStatus() {
-  return Promise.all(COUNCIL.map(async (item) => ({ provider: item.provider, model: item.model, configured: Boolean(await getPlatformSecret(item.key)) })));
+  return Promise.all(COUNCIL.map(async (item) => ({ provider: item.provider, model: item.model, configured: Boolean((await getPlatformSecretValues(item.key)).length) })));
 }
 
-async function configuredCouncil() { const ready = await Promise.all(COUNCIL.map(async (candidate) => { const apiKey = await getPlatformSecret(candidate.key); return apiKey ? { provider: candidate.provider, model: candidate.model, apiKey } : null; })); return ready.filter((item): item is { provider: string; model: string; apiKey: string } => Boolean(item)); }
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) { return new Promise<T>((resolve, reject) => { const timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs); promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); }); }); }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
-    promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
-  });
+async function completeSingle(messages: ChatMessage[], candidates: Candidate[], timeoutMs: number) {
+  let lastError: Error | null = null;
+  for (const candidate of candidates) {
+    try { return await withTimeout(providerFor(candidate.provider).complete(messages, { model: candidate.model, apiKey: candidate.apiKey, temperature: 0.1, maxTokens: 4096 }), timeoutMs, candidate.provider); }
+    catch (error) { lastError = error instanceof Error ? error : new Error(String(error)); }
+  }
+  throw lastError ?? new Error("No working Garvex credential is available.");
 }
 
-export async function multiAgentComplete(messages: ChatMessage[], opts?: { maxWorkers?: number; timeoutMs?: number; quorum?: number }) {
-  const council = await configuredCouncil();
-  if (!council.length) throw new Error("No Garvex provider keys are configured. Add provider API keys in Platform Settings.");
-  const timeoutMs = opts?.timeoutMs ?? 5000;
-  const maxWorkers = Math.min(opts?.maxWorkers ?? council.length, council.length);
-  const workers = council.slice(0, maxWorkers);
-  const quorum = Math.min(opts?.quorum ?? 3, workers.length);
-  const deadlineMs = Math.max(timeoutMs + 500, 5500);
-
-  type Outcome = { index: number; ok: boolean; result?: CompletionResult; error?: Error };
-  const pending = new Map<number, Promise<Outcome>>();
-  workers.forEach((worker, index) => {
-    pending.set(index, withTimeout(
-      providerFor(worker.provider).complete(messages, { model: worker.model, apiKey: worker.apiKey, temperature: 0.1, maxTokens: 4096 }),
-      timeoutMs,
-      worker.provider,
-    ).then((result) => ({ index, ok: true, result })).catch((error) => ({ index, ok: false, error: error instanceof Error ? error : new Error(String(error)) })));
-  });
-
-  const outcomes: Outcome[] = [];
-  const startedAt = Date.now();
-  while (pending.size && Date.now() - startedAt < deadlineMs) {
-    const outcome = await Promise.race([...pending.values()]);
-    pending.delete(outcome.index);
-    outcomes.push(outcome);
-    const successCount = outcomes.filter((item) => item.ok && Boolean(item.result?.text?.trim())).length;
-    if (successCount >= quorum) break;
+export async function multiAgentComplete(messages: ChatMessage[], opts?: { maxWorkers?: number; timeoutMs?: number; quorum?: number; strategy?: "single" | "complex" }) {
+  const candidates = await configuredCouncil();
+  if (!candidates.length) throw new Error("No Garvex provider keys are configured. Add provider API keys in Platform Settings.");
+  const timeoutMs = opts?.timeoutMs ?? 4500;
+  const strategy = opts?.strategy ?? "single";
+  if (strategy === "single") {
+    const result = await completeSingle(messages, candidates, timeoutMs);
+    return { ...result, workers: [{ provider: result.provider, model: result.model, tokensIn: result.tokensIn, tokensOut: result.tokensOut }], failedWorkers: 0, strategy: "single" as const };
   }
-
-  // Collect already-completed remainder without extending the normal latency budget.
-  const remainder = [...pending.values()];
-  if (remainder.length) {
-    const quick = await Promise.race([
-      Promise.all(remainder),
-      new Promise<Outcome[]>((resolve) => setTimeout(() => resolve([]), 350)),
-    ]);
-    outcomes.push(...quick);
-    pending.clear();
-  }
-
-  const successful = outcomes.filter((item): item is Outcome & { ok: true; result: CompletionResult } => item.ok && Boolean(item.result?.text?.trim())).map((item) => item.result);
+  const maxWorkers = Math.min(opts?.maxWorkers ?? candidates.length, candidates.length);
+  const workers = candidates.slice(0, maxWorkers);
+  const pending = workers.map((worker, index) => withTimeout(providerFor(worker.provider).complete(messages, { model: worker.model, apiKey: worker.apiKey, temperature: 0.1, maxTokens: 4096 }), timeoutMs, worker.provider).then((result) => ({ index, result })).catch((error) => ({ index, error: error instanceof Error ? error : new Error(String(error)) })));
+  const outcomes = await Promise.all(pending);
+  const successful = outcomes.filter((item): item is { index: number; result: CompletionResult } => "result" in item && Boolean(item.result.text?.trim())).map((item) => item.result);
   if (!successful.length) throw new Error("All configured Garvex providers failed or timed out.");
-
-  const evidence = successful.slice(0, 5).map((result, index) => `===== AGENT ${index + 1} | ${result.provider} | ${result.model} =====\n${result.text.slice(0, 18_000)}`).join("\n\n");
-  const judge = workers.find((item) => item.provider === "nvidia") ?? workers.find((item) => item.provider === "cerebras") ?? workers.find((item) => item.provider === successful[0].provider) ?? workers[0];
-  const judgePrompt: ChatMessage[] = [{ role: "system", content: "You are Garvex's synthesis judge. Multiple independent agents answered the same request. Reconcile them instead of blindly majority-voting. Prefer statements supported by multiple agents, flag uncertainty, preserve useful implementation details, and never invent facts. For code tasks, produce a concrete, technically coherent answer. Return only the final answer to the user." }, ...messages.filter((m) => m.role !== "assistant"), { role: "user", content: `Independent agent outputs:\n${evidence}\n\nSynthesize the strongest correct result.` }];
-  const final = await withTimeout(providerFor(judge.provider).complete(judgePrompt, { model: judge.model, apiKey: judge.apiKey, temperature: 0.05, maxTokens: 8192 }), Math.max(timeoutMs, 4500), "judge");
-  return { ...final, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: Math.max(0, workers.length - successful.length) };
+  const evidence = successful.slice(0, 7).map((result, index) => `===== AGENT ${index + 1} | ${result.provider} | ${result.model} =====\n${result.text.slice(0, 16000)}`).join("\n\n");
+  const judge = successful[0];
+  const judgePrompt: ChatMessage[] = [{ role: "system", content: "You are Garvex's synthesis judge. Reconcile independent agent outputs. Prefer evidence-supported conclusions, flag uncertainty, preserve concrete technical details, and never invent actions or facts. Return only the final answer." }, ...messages.filter((m) => m.role !== "assistant"), { role: "user", content: `Independent agent outputs:\n${evidence}\n\nSynthesize the strongest correct result.` }];
+  try {
+    const final = await withTimeout(providerFor(judge.provider).complete(judgePrompt, { model: judge.model, apiKey: judge.apiKey, temperature: 0.05, maxTokens: 8192 }), Math.max(3000, Math.min(timeoutMs, 3500)), "judge");
+    return { ...final, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: workers.length - successful.length, strategy: "complex" as const };
+  } catch {
+    const fallback = successful[0];
+    return { ...fallback, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: workers.length - successful.length, strategy: "complex" as const };
+  }
 }
