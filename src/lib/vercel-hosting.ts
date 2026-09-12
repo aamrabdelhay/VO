@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { deployments, domains, projects } from "@/db/schema";
+import { deployments, projects } from "@/db/schema";
 import { transition, recordEvent } from "@/lib/state-machine";
 import { decryptSecret } from "@/lib/crypto";
 import { envVars } from "@/db/schema";
@@ -85,11 +85,11 @@ async function ensureVercelProject(project: Project) {
     body: JSON.stringify({
       name,
       gitRepository: { type: "github", repo: project.repoFullName },
-      framework: project.framework || null,
-      rootDirectory: project.rootDirectory === "." ? undefined : project.rootDirectory,
-      installCommand: project.installCommand || undefined,
-      buildCommand: project.buildCommand || undefined,
-      outputDirectory: project.outputDirectory || undefined,
+      ...(project.framework ? { framework: project.framework } : {}),
+      ...(project.rootDirectory !== "." ? { rootDirectory: project.rootDirectory } : {}),
+      ...(project.installCommand ? { installCommand: project.installCommand } : {}),
+      ...(project.buildCommand ? { buildCommand: project.buildCommand } : {}),
+      ...(project.outputDirectory ? { outputDirectory: project.outputDirectory } : {}),
       skipGitConnectDuringLink: true,
     }),
   });
@@ -101,37 +101,41 @@ async function syncEnvironment(project: Project, vercelProjectId: string) {
     .from(envVars)
     .where(and(eq(envVars.projectId, project.id), eq(envVars.scope, "PRODUCTION")));
   if (!rows.length) return;
-
-  const body = rows.map((row) => ({
-    key: row.key,
-    value: decryptSecret(row.cipher),
-    type: "sensitive",
-    target: ["production"],
-  }));
-  await vercelRequest(`/v10/projects/${encodeURIComponent(vercelProjectId)}/env${teamQuery()}`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
+  for (const row of rows) {
+    await vercelRequest(`/v10/projects/${encodeURIComponent(vercelProjectId)}/env${teamQuery()}`, {
+      method: "POST",
+      body: JSON.stringify({
+        key: row.key,
+        value: decryptSecret(row.cipher),
+        type: "sensitive",
+        target: ["production"],
+      }),
+    });
+  }
 }
 
 async function assignFreeAlias(deploymentId: string, project: Project) {
-  const preferred = `${normalizeFreeDomain(project.freeDomain, project.slug)}.vercel.app`;
+  const base = normalizeFreeDomain(project.freeDomain, project.slug);
+  const preferred = `${base}.vercel.app`;
   try {
     await vercelRequest(`/v2/deployments/${encodeURIComponent(deploymentId)}/aliases${teamQuery()}`, {
       method: "POST",
       body: JSON.stringify({ alias: preferred }),
     });
     return preferred;
-  } catch {
-    const fallback = `${normalizeFreeDomain(project.freeDomain, project.slug)}-${project.id
-      .replace(/[^a-z0-9]/gi, "")
-      .slice(0, 6)
-      .toLowerCase()}.vercel.app`;
-    await vercelRequest(`/v2/deployments/${encodeURIComponent(deploymentId)}/aliases${teamQuery()}`, {
-      method: "POST",
-      body: JSON.stringify({ alias: fallback }),
-    });
-    return fallback;
+  } catch (error) {
+    const fallback = `${base}-${project.id.replace(/[^a-z0-9]/gi, "").slice(0, 8).toLowerCase()}.vercel.app`;
+    try {
+      await vercelRequest(`/v2/deployments/${encodeURIComponent(deploymentId)}/aliases${teamQuery()}`, {
+        method: "POST",
+        body: JSON.stringify({ alias: fallback }),
+      });
+      return fallback;
+    } catch (fallbackError) {
+      const preferredReason = error instanceof Error ? error.message : String(error);
+      const fallbackReason = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+      throw new Error(`Could not assign free deployment domain: ${preferredReason}; fallback: ${fallbackReason}`);
+    }
   }
 }
 
@@ -139,9 +143,31 @@ export function shouldUseVercelHosting() {
   return process.env.VERCEL === "1" || process.env.VERCEL_DEPLOY_PROVIDER === "vercel";
 }
 
+export async function launchDeploymentNow(deployment: Deployment, project: Project) {
+  if (!shouldUseVercelHosting()) return null;
+  if (deployment.status !== "QUEUED") return { status: deployment.status };
+  const started = await transition(
+    deployment.id,
+    "BUILDING",
+    { buildStartedAt: new Date() },
+    { event: "VERCEL_BUILD_STARTED", message: "Deployment handed to Vercel hosting" },
+  );
+  if (!started) throw new Error("Deployment could not enter BUILDING state");
+  try {
+    return await startVercelDeployment(project, { ...deployment, status: "BUILDING" });
+  } catch (error) {
+    await transition(
+      deployment.id,
+      "FAILED",
+      { finishedAt: new Date(), errorReason: error instanceof Error ? error.message : String(error) },
+      { event: "VERCEL_HANDOFF_FAILED", message: error instanceof Error ? error.message : String(error) },
+    );
+    throw error;
+  }
+}
+
 export async function startVercelDeployment(project: Project, deployment: Deployment) {
   if (!shouldUseVercelHosting()) return null;
-
   const vercelProject = await ensureVercelProject(project);
   await syncEnvironment(project, vercelProject.id).catch(async (error) => {
     await recordEvent(
@@ -163,13 +189,7 @@ export async function startVercelDeployment(project: Project, deployment: Deploy
         target: "production",
         forceNew: "1",
         skipAutoDetectionConfirmation: "1",
-        gitSource: {
-          type: "github",
-          org,
-          repo,
-          ref: deployment.branch,
-          sha: deployment.commitSha,
-        },
+        gitSource: { type: "github", org, repo, ref: deployment.branch, sha: deployment.commitSha },
         gitMetadata: {
           remoteUrl: `https://github.com/${project.repoFullName}`,
           commitRef: deployment.branch,
@@ -178,25 +198,24 @@ export async function startVercelDeployment(project: Project, deployment: Deploy
           commitAuthorName: deployment.commitAuthor ?? "VO",
         },
         projectSettings: {
-          framework: project.framework || undefined,
-          buildCommand: project.buildCommand || undefined,
-          installCommand: project.installCommand || undefined,
-          outputDirectory: project.outputDirectory || undefined,
-          rootDirectory: project.rootDirectory === "." ? undefined : project.rootDirectory,
+          ...(project.framework ? { framework: project.framework } : {}),
+          ...(project.buildCommand ? { buildCommand: project.buildCommand } : {}),
+          ...(project.installCommand ? { installCommand: project.installCommand } : {}),
+          ...(project.outputDirectory ? { outputDirectory: project.outputDirectory } : {}),
+          ...(project.rootDirectory !== "." ? { rootDirectory: project.rootDirectory } : {}),
         },
       }),
     },
   );
 
-  const alias = await assignFreeAlias(created.id, project);
+  const temporaryUrl = created.url ? `https://${created.url}` : null;
   await db
     .update(deployments)
     .set({
       imageRef: `vercel:${created.id}`,
       runtimeDriver: "vercel",
       hostId: "vercel",
-      url: `https://${alias}`,
-      buildStartedAt: new Date(),
+      url: temporaryUrl,
       updatedAt: new Date(),
     })
     .where(eq(deployments.id, deployment.id));
@@ -205,9 +224,9 @@ export async function startVercelDeployment(project: Project, deployment: Deploy
     project.id,
     "VERCEL_DEPLOYMENT_CREATED",
     `Vercel deployment ${created.id} created for ${deployment.commitSha.slice(0, 7)}`,
-    { vercelDeploymentId: created.id, url: `https://${alias}` },
+    { vercelDeploymentId: created.id, url: temporaryUrl },
   );
-  return { vercelDeploymentId: created.id, url: `https://${alias}` };
+  return { vercelDeploymentId: created.id, url: temporaryUrl };
 }
 
 export async function syncVercelDeployment(deployment: Deployment) {
@@ -215,23 +234,46 @@ export async function syncVercelDeployment(deployment: Deployment) {
     return deployment;
   }
   const vercelDeploymentId = deployment.imageRef.slice("vercel:".length);
-  const current = await vercelRequest<{ id: string; readyState?: string; url?: string; error?: { message?: string } }>(
-    `/v13/deployments/${encodeURIComponent(vercelDeploymentId)}${teamQuery()}`,
-  );
+  const current = await vercelRequest<{
+    id: string;
+    readyState?: string;
+    url?: string;
+    error?: { message?: string };
+  }>(`/v13/deployments/${encodeURIComponent(vercelDeploymentId)}${teamQuery()}`);
   const state = current.readyState;
   if (state === "READY" && deployment.status !== "PROMOTED") {
-    const promoted = await transition(
+    const project = await db
+      .select()
+      .from(projects)
+      .where(eq(projects.id, deployment.projectId))
+      .limit(1)
+      .then((rows) => rows[0]);
+    let freeUrl = deployment.url ?? (current.url ? `https://${current.url}` : null);
+    if (project) {
+      try {
+        const alias = await assignFreeAlias(vercelDeploymentId, project);
+        freeUrl = `https://${alias}`;
+      } catch (error) {
+        await recordEvent(
+          deployment.id,
+          deployment.projectId,
+          "FREE_DOMAIN_WARNING",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+    const built = await transition(
       deployment.id,
       "BUILT",
-      { buildEndedAt: new Date() },
+      { buildEndedAt: new Date(), url: freeUrl },
       { event: "VERCEL_BUILD_SUCCEEDED", message: "Vercel build completed" },
     );
-    if (promoted) {
+    if (built) {
       await transition(deployment.id, "STARTING");
       await transition(deployment.id, "HEALTH_CHECKING");
-      await transition(deployment.id, "HEALTHY", { healthyAt: new Date() });
+      await transition(deployment.id, "HEALTHY", { healthyAt: new Date(), url: freeUrl });
       await transition(deployment.id, "PROMOTING");
-      await transition(deployment.id, "PROMOTED", { promotedAt: new Date(), finishedAt: new Date() });
+      await transition(deployment.id, "PROMOTED", { promotedAt: new Date(), finishedAt: new Date(), url: freeUrl });
       await db
         .update(projects)
         .set({
@@ -241,11 +283,7 @@ export async function syncVercelDeployment(deployment: Deployment) {
         })
         .where(eq(projects.id, deployment.projectId));
     }
-    return {
-      ...deployment,
-      status: "PROMOTED" as const,
-      url: deployment.url ?? (current.url ? `https://${current.url}` : deployment.url),
-    };
+    return { ...deployment, status: "PROMOTED" as const, url: freeUrl };
   }
   if (state === "ERROR" || state === "CANCELED") {
     await transition(
@@ -263,6 +301,6 @@ export async function syncVercelDeployment(deployment: Deployment) {
   return deployment;
 }
 
-export async function freeDomainForProject(project: Project) {
+export function freeDomainForProject(project: Project) {
   return `${normalizeFreeDomain(project.freeDomain, project.slug)}.vercel.app`;
 }
