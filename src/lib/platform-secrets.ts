@@ -15,6 +15,7 @@ const ALLOWED = new Set([
   "CLOUDFLARE_API_TOKEN",
   "CLOUDFLARE_ACCOUNT_ID",
   "OLLAMA_API_KEY",
+  "GITHUB_TOKEN",
 ]);
 
 async function ensureTable() {
