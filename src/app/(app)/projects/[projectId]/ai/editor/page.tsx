@@ -1,5 +1,6 @@
 import { requireProjectAccess } from "@/lib/auth";
 import { resolveAIConfig } from "@/lib/ai/provider";
+import { getPlatformSecret } from "@/lib/platform-secrets";
 import { Panel, Empty } from "@/components/ui";
 import { AIEditor } from "@/components/ai-editor";
 import { NvidiaAISetup } from "@/components/nvidia-ai-setup";
@@ -11,6 +12,8 @@ export default async function AIEditorPage({ params }: { params: Promise<{ proje
   const { projectId } = await params;
   const { project, user } = await requireProjectAccess(projectId, "DEVELOPER");
   const config = await resolveAIConfig(project.orgId);
+  const platformNvidiaKey = await getPlatformSecret("NVIDIA_API_KEY");
+  const nvidiaConfigured = config?.provider === "nvidia" || Boolean(platformNvidiaKey);
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -21,7 +24,7 @@ export default async function AIEditorPage({ params }: { params: Promise<{ proje
         <Link className="btn" href={`/projects/${projectId}/ai`}>AI overview</Link>
       </div>
       <Panel title="NVIDIA AI (recommended free setup)">
-        <NvidiaAISetup csrf={user.csrfToken} projectId={projectId} configured={config?.provider === "nvidia"} />
+        <NvidiaAISetup csrf={user.csrfToken} projectId={projectId} configured={nvidiaConfigured} />
       </Panel>
       <Panel title="Edit your project with AI">
         <AIEditor csrf={user.csrfToken} projectId={projectId} />
