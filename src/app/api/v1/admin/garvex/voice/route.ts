@@ -23,37 +23,25 @@ export async function POST(request: Request) {
     transcription.append("file", file, file.name || "voice.webm");
     transcription.append("model", "whisper-large-v3-turbo");
     transcription.append("response_format", "json");
-    const stt = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${groqKey}` },
-      body: transcription,
-    });
+    const stt = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", { method: "POST", headers: { Authorization: `Bearer ${groqKey}` }, body: transcription });
     if (!stt.ok) throw new Error(`Speech-to-text failed (${stt.status}): ${await stt.text()}`);
     const sttData = await stt.json() as { text?: string };
     const text = String(sttData.text ?? "").trim();
     if (!text) throw new Error("No speech was detected.");
 
     const messages: ChatMessage[] = [
-      { role: "system", content: "You are Garvex Voice. Answer conversationally, naturally, and concisely. Never claim you performed an action unless the platform actually performed it. The voice channel is read-only unless the user explicitly asks to modify a project through a supported build operation." },
+      { role: "system", content: "You are Garvex Voice. Answer naturally and concisely. This voice channel is read-only unless the user explicitly asks for a supported Build & Fix operation. Never claim an action happened unless the system actually performed it." },
       { role: "user", content: text },
     ];
     const result = await multiAgentComplete(messages, { strategy: "complex", timeoutMs: 4500, maxWorkers: 12, quorum: 3 });
 
-    const tts = await fetch("https://openrouter.ai/api/v1/audio/speech", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${openRouterKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: process.env.GARVEX_TTS_MODEL || "google/gemini-3.1-flash-tts-preview",
-        voice: process.env.GARVEX_TTS_VOICE || "Kore",
-        input: result.text.slice(0, 8000),
-        response_format: "mp3",
-      }),
-    });
+    const ttsModel = process.env.GARVEX_TTS_MODEL || "mistralai/voxtral-mini-tts-2603";
+    const ttsVoice = process.env.GARVEX_TTS_VOICE || "en_paul_neutral";
+    const tts = await fetch("https://openrouter.ai/api/v1/audio/speech", { method: "POST", headers: { Authorization: `Bearer ${openRouterKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: ttsModel, voice: ttsVoice, input: result.text.slice(0, 8000), response_format: "mp3" }) });
     if (!tts.ok) throw new Error(`Text-to-speech failed (${tts.status}): ${await tts.text()}`);
     const contentType = tts.headers.get("content-type")?.split(";")[0] ?? "audio/mpeg";
     if (!contentType.startsWith("audio/")) throw new Error(`Unexpected TTS response: ${contentType}`);
     const audioBase64 = Buffer.from(await tts.arrayBuffer()).toString("base64");
-
     return ok({ transcript: text, answer: result.text, provider: result.provider, model: result.model, workers: result.workers, audio: `data:${contentType};base64,${audioBase64}` });
   });
 }
