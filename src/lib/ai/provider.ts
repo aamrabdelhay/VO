@@ -1,8 +1,8 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { aiConfigs, aiMessages } from "@/db/schema";
 import { decryptSecret } from "@/lib/crypto";
-import { sql } from "drizzle-orm";
+import { getPlatformSecret } from "@/lib/platform-secrets";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -28,7 +28,13 @@ export type ProviderOptions = {
   maxTokens: number;
 };
 
-// Rough public list prices (cents per 1K tokens) used for budget accounting only.
+export type AgentWorker = {
+  provider: string;
+  model: string;
+  result: PromiseSettledResult<CompletionResult>;
+};
+
+// Rough public list prices (cents per 1K tokens) used only for budget accounting.
 const PRICING: Record<string, { in: number; out: number }> = {
   default: { in: 0.03, out: 0.15 },
 };
@@ -83,7 +89,7 @@ class OpenAICompatibleProvider implements AIProvider {
     private readonly defaultBase: string,
   ) {}
   async complete(messages: ChatMessage[], opts: ProviderOptions) {
-    const res = await fetch(`${opts.baseUrl ?? this.defaultBase}/chat/completions`, {
+    const res = await fetch(`${(opts.baseUrl ?? this.defaultBase).replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` },
       body: JSON.stringify({
@@ -95,13 +101,13 @@ class OpenAICompatibleProvider implements AIProvider {
     });
     if (!res.ok) throw new Error(`${this.name} request failed (${res.status}): ${await res.text()}`);
     const data = (await res.json()) as {
-      choices: { message: { content: string } }[];
-      usage?: { prompt_tokens: number; completion_tokens: number };
+      choices?: { message?: { content?: string } }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
     const tokensIn = data.usage?.prompt_tokens ?? 0;
     const tokensOut = data.usage?.completion_tokens ?? 0;
     return {
-      text: data.choices[0]?.message?.content ?? "",
+      text: data.choices?.[0]?.message?.content ?? "",
       tokensIn,
       tokensOut,
       costCents: estimateCost(tokensIn, tokensOut),
@@ -147,32 +153,50 @@ class GeminiProvider implements AIProvider {
   }
 }
 
+class CohereProvider implements AIProvider {
+  readonly name = "cohere";
+  async complete(messages: ChatMessage[], opts: ProviderOptions) {
+    const res = await fetch(`${opts.baseUrl ?? "https://api.cohere.com/v2"}/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` },
+      body: JSON.stringify({ model: opts.model, messages, temperature: opts.temperature, max_tokens: opts.maxTokens }),
+    });
+    if (!res.ok) throw new Error(`Cohere request failed (${res.status}): ${await res.text()}`);
+    const data = (await res.json()) as {
+      message?: { content?: { type: string; text?: string }[] };
+      usage?: { tokens?: { input_tokens?: number; output_tokens?: number } };
+    };
+    const text = data.message?.content?.map((part) => part.text ?? "").join("") ?? "";
+    const tokensIn = data.usage?.tokens?.input_tokens ?? 0;
+    const tokensOut = data.usage?.tokens?.output_tokens ?? 0;
+    return { text, tokensIn, tokensOut, costCents: estimateCost(tokensIn, tokensOut), provider: this.name, model: opts.model };
+  }
+}
+
 export function providerFor(name: string): AIProvider {
   switch (name) {
-    case "anthropic":
-      return new AnthropicProvider();
-    case "openai":
-      return new OpenAICompatibleProvider("openai", "https://api.openai.com/v1");
-    case "gemini":
-      return new GeminiProvider();
-    default:
-      return new OpenAICompatibleProvider(name, "https://api.openai.com/v1");
+    case "anthropic": return new AnthropicProvider();
+    case "gemini": return new GeminiProvider();
+    case "cohere": return new CohereProvider();
+    case "openai": return new OpenAICompatibleProvider("openai", "https://api.openai.com/v1");
+    case "nvidia": return new OpenAICompatibleProvider("nvidia", "https://integrate.api.nvidia.com/v1");
+    case "openrouter": return new OpenAICompatibleProvider("openrouter", "https://openrouter.ai/api/v1");
+    case "mistral": return new OpenAICompatibleProvider("mistral", "https://api.mistral.ai/v1");
+    case "cerebras": return new OpenAICompatibleProvider("cerebras", "https://api.cerebras.ai/v1");
+    case "groq": return new OpenAICompatibleProvider("groq", "https://api.groq.com/openai/v1");
+    case "kilo": return new OpenAICompatibleProvider("kilo", "https://api.kilo.ai/api/gateway");
+    default: return new OpenAICompatibleProvider(name, "https://api.openai.com/v1");
   }
 }
 
 export type ResolvedAIConfig = ProviderOptions & { provider: string; dailyBudgetCents: number };
 
-/** BYOK resolution: org configuration first, platform env fallback. */
 export async function resolveAIConfig(orgId: string): Promise<ResolvedAIConfig | null> {
   const [config] = await db.select().from(aiConfigs).where(eq(aiConfigs.orgId, orgId)).limit(1);
   if (config) {
     let apiKey: string | null = null;
     if (config.apiKeyCipher) {
-      try {
-        apiKey = decryptSecret(config.apiKeyCipher);
-      } catch {
-        apiKey = null;
-      }
+      try { apiKey = decryptSecret(config.apiKeyCipher); } catch { apiKey = null; }
     }
     apiKey = apiKey ?? envKeyFor(config.provider);
     if (!apiKey) return null;
@@ -223,4 +247,63 @@ export async function spentTodayCents(orgId: string): Promise<number> {
     where p.org_id = ${orgId} and m.created_at > now() - interval '1 day';
   `);
   return Number(rows.rows?.[0]?.total ?? 0);
+}
+
+const COUNCIL: { provider: string; key: string; model: string }[] = [
+  { provider: "nvidia", key: "NVIDIA_API_KEY", model: "deepseek-ai/deepseek-v4-flash-0731" },
+  { provider: "openrouter", key: "OPENROUTER_API_KEY", model: "openrouter/free" },
+  { provider: "mistral", key: "MISTRAL_API_KEY", model: "mistral-small-latest" },
+  { provider: "cerebras", key: "CEREBRAS_API_KEY", model: "gpt-oss-120b" },
+  { provider: "groq", key: "GROQ_API_KEY", model: "openai/gpt-oss-120b" },
+  { provider: "kilo", key: "KILO_API_KEY", model: "kilo-auto/free" },
+  { provider: "cohere", key: "COHERE_API_KEY", model: "command-a" },
+];
+
+async function configuredCouncil() {
+  const ready = [] as { provider: string; model: string; apiKey: string }[];
+  await Promise.all(COUNCIL.map(async (candidate) => {
+    const apiKey = await getPlatformSecret(candidate.key);
+    if (apiKey) ready.push({ provider: candidate.provider, model: candidate.model, apiKey });
+  }));
+  return ready;
+}
+
+export async function multiAgentComplete(messages: ChatMessage[], opts?: { maxWorkers?: number; timeoutMs?: number }) {
+  const council = await configuredCouncil();
+  if (!council.length) throw new Error("No Garvex provider keys are configured. Add provider API keys in Platform Settings.");
+  const timeoutMs = opts?.timeoutMs ?? 18_000;
+  const workers = council.slice(0, opts?.maxWorkers ?? council.length);
+  const settled = await Promise.allSettled(workers.map(async (worker) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const originalFetch = globalThis.fetch;
+      const provider = providerFor(worker.provider);
+      // Provider implementations use the global fetch; temporarily enforce a hard timeout.
+      const wrapped = async (...args: Parameters<typeof fetch>) => originalFetch(...args, { signal: controller.signal });
+      globalThis.fetch = wrapped as typeof fetch;
+      try {
+        return await provider.complete(messages, { model: worker.model, apiKey: worker.apiKey, temperature: 0.1, maxTokens: 4096 });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+  }));
+  const successful = settled.filter((item): item is PromiseFulfilledResult<CompletionResult> => item.status === "fulfilled" && Boolean(item.value.text?.trim())).map((item) => item.value);
+  if (!successful.length) throw new Error("All configured Garvex providers failed or timed out.");
+
+  const evidence = successful.map((result, index) => `===== AGENT ${index + 1} | ${result.provider} | ${result.model} =====\n${result.text.slice(0, 18_000)}`).join("\n\n");
+  const judge = council.find((item) => item.provider === "nvidia") ?? council.find((item) => item.provider === "cerebras") ?? council[0];
+  const judgePrompt: ChatMessage[] = [
+    {
+      role: "system",
+      content: "You are Garvex's synthesis judge. Multiple independent agents answered the same request. Reconcile them instead of blindly majority-voting. Prefer statements supported by multiple agents, flag uncertainty, preserve useful implementation details, and never invent facts. For code tasks, produce a concrete, technically coherent answer. Return only the final answer to the user.",
+    },
+    ...messages.filter((m) => m.role !== "assistant"),
+    { role: "user", content: `Independent agent outputs:\n${evidence}\n\nSynthesize the strongest correct result.` },
+  ];
+  const final = await providerFor(judge.provider).complete(judgePrompt, { model: judge.model, apiKey: judge.apiKey, temperature: 0.05, maxTokens: 8192 });
+  return { ...final, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: settled.length - successful.length };
 }
