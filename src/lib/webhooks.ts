@@ -6,6 +6,7 @@ import { installationToken } from "@/lib/github-auth";
 import { upsertPrComment } from "@/lib/github";
 import { log } from "@/lib/logger";
 import { previewHost } from "@/lib/router";
+import { launchDeploymentNow } from "@/lib/vercel-hosting";
 
 type PushPayload = {
   ref?: string;
@@ -65,16 +66,14 @@ export async function handlePush(payload: PushPayload, deliveryId: string) {
         target: "PRODUCTION",
         commitMessage: payload.head_commit?.message ?? null,
         commitAuthor: payload.head_commit?.author?.name ?? payload.pusher?.name ?? null,
-        commitTimestamp: payload.head_commit?.timestamp
-          ? new Date(payload.head_commit.timestamp)
-          : null,
+        commitTimestamp: payload.head_commit?.timestamp ? new Date(payload.head_commit.timestamp) : null,
         triggeredBy: payload.pusher?.name ?? "github",
         triggerSource: "github-push",
         correlationId: deliveryId,
       });
+      await launchDeploymentNow(deployment, project);
       results.push(`production deployment ${deployment.id}`);
     } else if (project.previewsEnabled) {
-      // Branch previews reuse the latest commit per branch (one active runtime).
       const active = await db
         .select()
         .from(deployments)
@@ -86,9 +85,7 @@ export async function handlePush(payload: PushPayload, deliveryId: string) {
             inArray(deployments.status, ["PROMOTED", "HEALTHY", "BUILT", "STARTING"]),
           ),
         );
-      for (const previous of active) {
-        await expirePreview(previous.id, "superseded by newer preview commit");
-      }
+      for (const previous of active) await expirePreview(previous.id, "superseded by newer preview commit");
       const deployment = await createDeployment({
         project,
         commitSha: sha,
@@ -100,6 +97,7 @@ export async function handlePush(payload: PushPayload, deliveryId: string) {
         triggerSource: "github-push",
         correlationId: deliveryId,
       });
+      await launchDeploymentNow(deployment, project);
       results.push(`preview deployment ${deployment.id}`);
     }
   }
@@ -132,15 +130,12 @@ export async function handlePullRequest(payload: PullRequestPayload, deliveryId:
           ),
         )
         .orderBy(desc(deployments.queuedAt));
-      for (const preview of previews) {
-        await expirePreview(preview.id, `pull request #${pr.number} closed`);
-      }
+      for (const preview of previews) await expirePreview(preview.id, `pull request #${pr.number} closed`);
       results.push(`expired ${previews.length} preview(s) for PR #${pr.number}`);
       continue;
     }
-    if (!["opened", "synchronize", "reopened", "ready_for_review"].includes(payload.action ?? "")) {
-      continue;
-    }
+    if (!["opened", "synchronize", "reopened", "ready_for_review"].includes(payload.action ?? "")) continue;
+
     const active = await db
       .select()
       .from(deployments)
@@ -166,6 +161,7 @@ export async function handlePullRequest(payload: PullRequestPayload, deliveryId:
       triggerSource: "github-pull-request",
       correlationId: deliveryId,
     });
+    await launchDeploymentNow(deployment, project);
     results.push(`preview deployment ${deployment.id}`);
 
     const token = await installationToken(project.orgId);
