@@ -2,6 +2,7 @@ import { cookies, headers } from "next/headers";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { memberships, organizations, projects, sessions, users } from "@/db/schema";
+import { repairOperationalSchema } from "@/db/repair";
 import { hashPassword, randomToken, sha256, verifyPassword } from "@/lib/crypto";
 
 export const SESSION_COOKIE = "platform_session";
@@ -93,6 +94,8 @@ export async function endSession() {
 }
 
 export async function getSessionUser(): Promise<SessionUser | null> {
+  await repairOperationalSchema();
+
   if (AUTH_DISABLED) {
     const [user] = await db.select().from(users).limit(1);
     if (!user) return null;
@@ -164,10 +167,6 @@ export async function primaryOrg(userId: string) {
   return rows[0] ?? null;
 }
 
-/**
- * Server-side project authorization. Every protected project endpoint must go
- * through this; cross-project access is impossible by membership design.
- */
 export async function requireProjectAccess(projectId: string, minRole: Role = "VIEWER") {
   const user = await requireUser();
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
@@ -181,7 +180,6 @@ export async function requireProjectAccess(projectId: string, minRole: Role = "V
   return { user, project, role: effective };
 }
 
-/** Double-submit CSRF check for mutating API requests. */
 export async function assertCsrf(user: SessionUser) {
   const h = await headers();
   const provided = h.get("x-csrf-token");
