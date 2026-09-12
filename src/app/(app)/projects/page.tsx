@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { deployments, projects } from "@/db/schema";
 import { primaryOrg, requireUser } from "@/lib/auth";
 import { Empty, Panel, Status, timeAgo } from "@/components/ui";
-import { platformHost } from "@/lib/router";
+import { freeDomainForProject } from "@/lib/vercel-hosting";
 
 export const dynamic = "force-dynamic";
 
@@ -62,7 +62,9 @@ export default async function ProjectsPage() {
                     </Link>
                   </td>
                   <td className="mono" style={{ color: "var(--color-fg-secondary)" }}>
-                    {platformHost(project.slug)}
+                    <a href={`https://${freeDomainForProject(project)}`} target="_blank" rel="noreferrer">
+                      {freeDomainForProject(project)} ↗
+                    </a>
                   </td>
                   <td className="mono" style={{ color: "var(--color-fg-secondary)" }}>
                     {project.repoFullName}
@@ -72,9 +74,8 @@ export default async function ProjectsPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
-        )}
-      </Panel>
+          </Panel>
+      </div>
     </div>
   );
 }
