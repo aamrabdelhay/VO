@@ -3,7 +3,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { containerInstances, deployments, healthCheckResults } from "@/db/schema";
 import { requireProjectAccess } from "@/lib/auth";
-import { platformHost } from "@/lib/router";
+import { freeDomainForProject, syncVercelDeployment } from "@/lib/vercel-hosting";
 import { Empty, KeyValue, Metric, Panel, Status, duration, timeAgo } from "@/components/ui";
 import { ActionButton } from "@/components/client";
 
@@ -23,7 +23,8 @@ export default async function ProjectOverview({
     .where(eq(deployments.projectId, projectId))
     .orderBy(desc(deployments.queuedAt))
     .limit(8);
-  const current = recent.find((d) => d.id === project.currentHealthyDeploymentId) ?? null;
+  const currentCandidate = recent.find((d) => d.id === project.currentHealthyDeploymentId) ?? null;
+  const current = currentCandidate ? await syncVercelDeployment(currentCandidate) : null;
   const [instance] = current
     ? await db
         .select()
@@ -48,6 +49,7 @@ export default async function ProjectOverview({
   const rollbackTarget = recent.find(
     (d) => d.id !== project.currentHealthyDeploymentId && d.artifactRef && d.target === "PRODUCTION",
   );
+  const liveUrl = current?.url ?? `https://${freeDomainForProject(project)}`;
 
   return (
     <div className="flex flex-col gap-4">
@@ -59,12 +61,12 @@ export default async function ProjectOverview({
         />
         <Metric
           label="Runtime"
-          value={instance ? `port ${instance.port}` : "stopped"}
-          hint={instance ? `${instance.driver} driver` : "no running container"}
+          value={instance ? `port ${instance.port}` : "hosted"}
+          hint={instance ? `${instance.driver} driver` : "Vercel deployment"}
         />
         <Metric
           label="Last health probe"
-          value={health[0] ? (health[0].ok ? "healthy" : "failing") : "—"}
+          value={health[0] ? (health[0].ok ? "healthy" : "failing") : current?.status === "PROMOTED" ? "healthy" : "—"}
           hint={health[0] ? `${health[0].latencyMs ?? 0}ms` : undefined}
         />
         <Metric
@@ -73,6 +75,38 @@ export default async function ProjectOverview({
           hint={`generation ${project.deploymentGeneration}`}
         />
       </div>
+
+      <Panel
+        title="Live project"
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Link className="btn" href={`/projects/${projectId}/preview`}>
+              Preview inside VO
+            </Link>
+            <a className="btn btn-primary" href={liveUrl} target="_blank" rel="noreferrer">
+              Open live project ↗
+            </a>
+          </div>
+        }
+      >
+        <div className="grid gap-4 p-4 lg:grid-cols-[1fr_auto] lg:items-center">
+          <div>
+            <div className="text-sm font-semibold">{project.name}</div>
+            <div className="mono mt-1 text-xs" style={{ color: "var(--color-fg-secondary)" }}>
+              {liveUrl}
+            </div>
+            <p className="hint mt-2">
+              This URL is assigned to this project only. Future successful deployments move the same free URL to the newest deployment.
+            </p>
+          </div>
+          <div className="rounded border p-3 text-right" style={{ borderColor: "var(--color-border)" }}>
+            <div className="text-[11px] uppercase tracking-wide" style={{ color: "var(--color-fg-muted)" }}>
+              Domain
+            </div>
+            <div className="mono mt-1 text-sm">{new URL(liveUrl).hostname}</div>
+          </div>
+        </div>
+      </Panel>
 
       <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
         <Panel
@@ -102,7 +136,7 @@ export default async function ProjectOverview({
                   <tr key={d.id}>
                     <td>
                       <Link href={`/projects/${projectId}/deployments/${d.id}`}>
-                        <Status status={d.status} />
+                        <Status status={d.id === current?.id ? current.status : d.status} />
                       </Link>
                     </td>
                     <td className="mono">{d.commitSha.slice(0, 7)}</td>
@@ -123,7 +157,7 @@ export default async function ProjectOverview({
           <Panel title="State">
             <KeyValue
               items={[
-                ["Production URL", <span key="u" className="mono">{platformHost(project.slug)}</span>],
+                ["Production URL", <a key="u" className="mono" href={liveUrl} target="_blank" rel="noreferrer">{liveUrl}</a>],
                 ["Desired deployment", <span key="d" className="mono">{project.desiredDeploymentId?.slice(0, 8) ?? "—"}</span>],
                 ["Current healthy", <span key="c" className="mono">{project.currentHealthyDeploymentId?.slice(0, 8) ?? "—"}</span>],
                 ["Last success", <span key="s" className="mono">{project.lastSuccessfulCommitSha?.slice(0, 7) ?? "—"}</span>],
