@@ -2,8 +2,8 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 
 /**
- * Creates the operational tables that can be absent when an older database is
- * connected to a newer application revision. Safe to run repeatedly.
+ * Creates/repairs operational tables that can be absent or older than the
+ * application schema. Safe to run repeatedly against an existing database.
  */
 export async function repairOperationalSchema() {
   await db.execute(sql`
@@ -53,9 +53,6 @@ export async function repairOperationalSchema() {
     );
   `);
 
-  // Keep these columns intentionally unbound here: the existing production DB
-  // may have older project/deployment definitions. Application authorization
-  // remains enforced in the application layer.
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS container_instances (
       id text PRIMARY KEY,
@@ -69,8 +66,16 @@ export async function repairOperationalSchema() {
       pid integer,
       started_at timestamptz NOT NULL DEFAULT now(),
       stopped_at timestamptz,
-      last_seen_at timestamptz
+      last_seen_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now()
     );
   `);
+
+  // Older deployments used started_at but the current Drizzle schema queries created_at.
+  // Add the current column without destroying legacy data.
+  await db.execute(sql`ALTER TABLE container_instances ADD COLUMN IF NOT EXISTS created_at timestamptz;`);
+  await db.execute(sql`UPDATE container_instances SET created_at = COALESCE(created_at, started_at, now()) WHERE created_at IS NULL;`);
+  await db.execute(sql`ALTER TABLE container_instances ALTER COLUMN created_at SET DEFAULT now();`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS container_project_idx ON container_instances (project_id, status);`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS container_created_idx ON container_instances (created_at DESC);`);
 }
