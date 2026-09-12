@@ -3,6 +3,7 @@ import os
 from dotenv import load_dotenv
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -99,7 +100,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
                 "content": "Greet the user naturally in one short sentence and wait for their first request.",
             }
         )
-        await worker.queue_frame_from_model.__self__.queue_frames([]) if False else None
+        await worker.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport: BaseTransport, client):
