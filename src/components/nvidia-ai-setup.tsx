@@ -20,19 +20,17 @@ export function NvidiaAISetup({ csrf, projectId, configured }: { csrf: string; p
           <div className="mt-1 text-[13px] font-medium">NVIDIA NIM · DeepSeek V4 Flash</div>
           <div className="hint mt-1">{MODEL}</div>
           <div className="hint mt-1">{BASE_URL}</div>
-          <p className="hint mt-3">This is a free NVIDIA endpoint currently listed for coding, chat and agentic workflows.</p>
+          <p className="hint mt-3">Free NVIDIA endpoint currently listed for coding, chat and agentic workflows.</p>
         </div>
         <form className="flex flex-col gap-3" onSubmit={async (event) => {
-          event.preventDefault();
-          setBusy(true); setMessage(null);
+          event.preventDefault(); setBusy(true); setMessage(null);
           try {
             const res = await fetch(`/api/v1/projects/${projectId}/ai`, {
               method: "POST",
               headers: { "content-type": "application/json", "x-csrf-token": csrf },
-              body: JSON.stringify({ action: "configure", provider: "nvidia", model: MODEL, baseUrl: BASE_URL, apiKey, dailyBudgetCents: 0 }),
+              body: JSON.stringify({ action: "configure", provider: "nvidia", model: MODEL, baseUrl: BASE_URL, apiKey, dailyBudgetCents: 500 }),
             });
-            const text = await res.text();
-            const data = text ? JSON.parse(text) : {};
+            const text = await res.text(); const data = text ? JSON.parse(text) : {};
             if (!res.ok) throw new Error(data?.error?.message ?? `Request failed (${res.status})`);
             setApiKey(""); setMessage("NVIDIA AI is configured in VO."); router.refresh();
           } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
