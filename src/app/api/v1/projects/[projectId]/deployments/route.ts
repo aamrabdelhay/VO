@@ -7,6 +7,7 @@ import { audit } from "@/lib/audit";
 import { createDeployment } from "@/lib/deploy";
 import { getBranchCommit } from "@/lib/github";
 import { installationToken } from "@/lib/github-auth";
+import { launchDeploymentNow } from "@/lib/vercel-hosting";
 
 export const dynamic = "force-dynamic";
 
@@ -41,9 +42,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ projectId:
     let commit = body.commitSha
       ? { sha: body.commitSha, message: "manual deployment", author: user.name, date: new Date().toISOString() }
       : null;
-    if (!commit) {
-      commit = await getBranchCommit(project.repoFullName, branch, token);
-    }
+    if (!commit) commit = await getBranchCommit(project.repoFullName, branch, token);
     if (!commit?.sha) throw new HttpError(400, "Could not resolve a commit to deploy");
 
     const deployment = await createDeployment({
@@ -57,6 +56,13 @@ export async function POST(request: Request, ctx: { params: Promise<{ projectId:
       triggeredBy: user.email,
       triggerSource: "dashboard",
     });
+
+    try {
+      await launchDeploymentNow(deployment, project);
+    } catch (error) {
+      throw new HttpError(502, error instanceof Error ? error.message : String(error));
+    }
+
     await audit({
       orgId: project.orgId,
       projectId,
