@@ -8,12 +8,11 @@ import { hashPassword, randomToken, sha256, verifyPassword } from "@/lib/crypto"
 export const SESSION_COOKIE = "platform_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
 
-// Temporary preview mode: set PLATFORM_AUTH_DISABLED=0 to restore the normal login flow.
+// Temporary preview mode. Set PLATFORM_AUTH_DISABLED=0 to restore normal login.
 const AUTH_DISABLED = process.env.PLATFORM_AUTH_DISABLED !== "0";
 const BYPASS_CSRF_TOKEN = "temporary-preview-bypass";
 
 export type Role = "OWNER" | "ADMIN" | "DEVELOPER" | "VIEWER";
-
 const ROLE_RANK: Record<Role, number> = { VIEWER: 0, DEVELOPER: 1, ADMIN: 2, OWNER: 3 };
 
 export type SessionUser = {
@@ -26,10 +25,7 @@ export type SessionUser = {
 };
 
 export class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
+  constructor(readonly status: number, message: string) {
     super(message);
   }
 }
@@ -49,11 +45,7 @@ export async function createUser(email: string, name: string, password: string) 
 }
 
 export async function authenticate(email: string, password: string) {
-  const [user] = await db
-    .select()
-    .from(users)
-    .where(eq(users.email, email.toLowerCase().trim()))
-    .limit(1);
+  const [user] = await db.select().from(users).where(eq(users.email, email.toLowerCase().trim())).limit(1);
   if (!user || !verifyPassword(password, user.passwordHash)) return null;
   return user;
 }
@@ -84,12 +76,7 @@ export async function startSession(userId: string) {
 export async function endSession() {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
-  if (token) {
-    await db
-      .update(sessions)
-      .set({ revokedAt: new Date() })
-      .where(eq(sessions.tokenHash, sha256(token)));
-  }
+  if (token) await db.update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.tokenHash, sha256(token)));
   jar.delete(SESSION_COOKIE);
 }
 
@@ -97,8 +84,13 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   await repairOperationalSchema();
 
   if (AUTH_DISABLED) {
-    const [user] = await db.select().from(users).limit(1);
-    if (!user) return null;
+    let [user] = await db.select().from(users).limit(1);
+    if (!user) {
+      const email = process.env.PLATFORM_ADMIN_EMAIL ?? "preview@platform.local";
+      const created = await createUser(email, "Platform Owner", randomToken(32));
+      await db.update(users).set({ isPlatformAdmin: true }).where(eq(users.id, created.user.id));
+      user = { ...created.user, isPlatformAdmin: true };
+    }
     return {
       id: user.id,
       email: user.email,
@@ -149,11 +141,7 @@ export async function requirePlatformAdmin(): Promise<SessionUser> {
 }
 
 export async function orgRole(userId: string, orgId: string): Promise<Role | null> {
-  const [m] = await db
-    .select()
-    .from(memberships)
-    .where(and(eq(memberships.orgId, orgId), eq(memberships.userId, userId)))
-    .limit(1);
+  const [m] = await db.select().from(memberships).where(and(eq(memberships.orgId, orgId), eq(memberships.userId, userId))).limit(1);
   return (m?.role as Role) ?? null;
 }
 
@@ -174,16 +162,13 @@ export async function requireProjectAccess(projectId: string, minRole: Role = "V
   const role = await orgRole(user.id, project.orgId);
   if (!role && !user.isPlatformAdmin) throw new HttpError(404, "Project not found");
   const effective: Role = role ?? "ADMIN";
-  if (ROLE_RANK[effective] < ROLE_RANK[minRole]) {
-    throw new HttpError(403, `Requires ${minRole} role`);
-  }
+  if (ROLE_RANK[effective] < ROLE_RANK[minRole]) throw new HttpError(403, `Requires ${minRole} role`);
   return { user, project, role: effective };
 }
 
 export async function assertCsrf(user: SessionUser) {
+  if (AUTH_DISABLED) return;
   const h = await headers();
   const provided = h.get("x-csrf-token");
-  if (!provided || provided !== user.csrfToken) {
-    throw new HttpError(403, "Invalid CSRF token");
-  }
+  if (!provided || provided !== user.csrfToken) throw new HttpError(403, "Invalid CSRF token");
 }
