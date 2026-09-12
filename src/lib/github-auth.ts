@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { githubInstallations } from "@/db/schema";
 import { decryptSecret } from "@/lib/crypto";
+import { getPlatformSecret } from "@/lib/platform-secrets";
 import { log } from "@/lib/logger";
 
 type CachedToken = { token: string; expiresAt: number };
@@ -54,7 +55,7 @@ async function mintInstallationToken(installationId: string): Promise<string | n
 
 /**
  * Resolves a short-lived credential for repository access.
- * Order: GitHub App installation token → stored org PAT → platform env token.
+ * Order: GitHub App installation token → stored org PAT → encrypted platform PAT → env token.
  * Public repositories work with no credential at all.
  */
 export async function installationToken(orgId: string): Promise<string | null> {
@@ -77,5 +78,5 @@ export async function installationToken(orgId: string): Promise<string | null> {
       }
     }
   }
-  return process.env.GITHUB_TOKEN ?? null;
+  return (await getPlatformSecret("GITHUB_TOKEN")) ?? process.env.GITHUB_TOKEN ?? null;
 }
