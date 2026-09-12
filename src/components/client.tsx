@@ -158,6 +158,7 @@ export function NewProjectForm({ csrf }: { csrf: string }) {
   const [form, setForm] = useState({
     name: "",
     repoFullName: "",
+    freeDomain: "",
     productionBranch: "main",
     rootDirectory: ".",
     installCommand: "",
@@ -207,6 +208,12 @@ export function NewProjectForm({ csrf }: { csrf: string }) {
       }}
     >
       {field("name", "Project name", "storefront")}
+      {field(
+        "freeDomain",
+        "Free domain",
+        "storefront",
+        "Creates a free stable URL like storefront.vercel.app. Must be unique on the platform.",
+      )}
       {field("repoFullName", "GitHub repository", "owner/repo", "Source of truth for every deployment")}
       {field("productionBranch", "Production branch", "main")}
       {field("rootDirectory", "Root directory", ".")}
@@ -296,12 +303,7 @@ export function SettingsForm({
               className="input"
               type={f.type === "number" ? "number" : "text"}
               value={String(form[f.key] ?? "")}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  [f.key]: f.type === "number" ? Number(e.target.value) : e.target.value,
-                })
-              }
+              onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
             />
           )}
           {f.hint ? <p className="hint">{f.hint}</p> : null}
@@ -311,270 +313,34 @@ export function SettingsForm({
         <button className="btn btn-primary" type="submit" disabled={busy}>
           {busy ? "Saving…" : "Save changes"}
         </button>
-        {status ? <span style={{ fontSize: 11.5, color: "var(--color-fg-muted)" }}>{status}</span> : null}
+        {status ? <span className="hint">{status}</span> : null}
       </div>
-    </form>
-  );
-}
-
-export function EnvVarForm({ csrf, projectId }: { csrf: string; projectId: string }) {
-  const router = useRouter();
-  const [key, setKey] = useState("");
-  const [value, setValue] = useState("");
-  const [scope, setScope] = useState("PRODUCTION");
-  const [error, setError] = useState<string | null>(null);
-
-  return (
-    <form
-      className="flex flex-wrap items-end gap-3 p-3.5"
-      onSubmit={async (e) => {
-        e.preventDefault();
-        setError(null);
-        try {
-          await api(`/api/v1/projects/${projectId}/env`, {
-            method: "POST",
-            csrf,
-            body: JSON.stringify({ key, value, scope }),
-          });
-          setKey("");
-          setValue("");
-          router.refresh();
-        } catch (err) {
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      }}
-    >
-      <div className="min-w-[180px] flex-1">
-        <label className="label" htmlFor="env-key">
-          Key
-        </label>
-        <input id="env-key" className="input" value={key} onChange={(e) => setKey(e.target.value)} required />
-      </div>
-      <div className="min-w-[220px] flex-1">
-        <label className="label" htmlFor="env-value">
-          Value
-        </label>
-        <input
-          id="env-value"
-          className="input"
-          type="password"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          required
-        />
-      </div>
-      <div>
-        <label className="label" htmlFor="env-scope">
-          Scope
-        </label>
-        <select id="env-scope" className="select" value={scope} onChange={(e) => setScope(e.target.value)}>
-          <option>PRODUCTION</option>
-          <option>PREVIEW</option>
-          <option>DEVELOPMENT</option>
-        </select>
-      </div>
-      <button className="btn btn-primary" type="submit">
-        Add variable
-      </button>
-      {error ? <span style={{ color: "var(--color-danger)", fontSize: 11.5 }}>{error}</span> : null}
-    </form>
-  );
-}
-
-export function DomainForm({ csrf, projectId }: { csrf: string; projectId: string }) {
-  const router = useRouter();
-  const [domain, setDomain] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  return (
-    <form
-      className="flex flex-wrap items-end gap-3 p-3.5"
-      onSubmit={async (e) => {
-        e.preventDefault();
-        setError(null);
-        try {
-          await api(`/api/v1/projects/${projectId}/domains`, {
-            method: "POST",
-            csrf,
-            body: JSON.stringify({ domain }),
-          });
-          setDomain("");
-          router.refresh();
-        } catch (err) {
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      }}
-    >
-      <div className="min-w-[260px] flex-1">
-        <label className="label" htmlFor="domain">
-          Custom domain
-        </label>
-        <input
-          id="domain"
-          className="input"
-          placeholder="app.example.com"
-          value={domain}
-          onChange={(e) => setDomain(e.target.value)}
-          required
-        />
-      </div>
-      <button className="btn btn-primary" type="submit">
-        Add domain
-      </button>
-      {error ? <span style={{ color: "var(--color-danger)", fontSize: 11.5 }}>{error}</span> : null}
     </form>
   );
 }
 
 export function LogStream({ deploymentId, live }: { deploymentId: string; live: boolean }) {
   const [lines, setLines] = useState<string[]>([]);
-  const [autoscroll, setAutoscroll] = useState(true);
-  const [filter, setFilter] = useState("");
-  const ref = useRef<HTMLDivElement>(null);
-
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
-    let cancelled = false;
     const load = async () => {
-      const data = (await api(`/api/v1/deployments/${deploymentId}/logs`)) as {
-        chunks: { content: string }[];
-      };
-      if (!cancelled) setLines(data.chunks.map((c) => c.content));
+      try {
+        const data = await api(`/api/v1/deployments/${deploymentId}/logs`);
+        setLines(data?.lines ?? []);
+      } catch {
+        // The page still provides the durable event stream if log polling is unavailable.
+      }
     };
     void load();
-    if (!live) return;
-    const source = new EventSource(`/api/v1/deployments/${deploymentId}/logs?stream=1`);
-    source.onmessage = (event) => {
-      setLines((prev) => [...prev.slice(-2000), JSON.parse(event.data) as string]);
-    };
+    if (live) timer.current = setInterval(load, 2000);
     return () => {
-      cancelled = true;
-      source.close();
+      if (timer.current) clearInterval(timer.current);
     };
   }, [deploymentId, live]);
 
-  useEffect(() => {
-    if (autoscroll && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
-  }, [lines, autoscroll]);
-
-  const visible = filter ? lines.filter((l) => l.toLowerCase().includes(filter.toLowerCase())) : lines;
-
   return (
-    <div>
-      <div className="flex flex-wrap items-center gap-2 border-b px-3.5 py-2">
-        <input
-          className="input max-w-[240px]"
-          placeholder="Search logs"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          aria-label="Search logs"
-        />
-        <label className="flex items-center gap-1.5" style={{ fontSize: 11.5, color: "var(--color-fg-secondary)" }}>
-          <input type="checkbox" checked={autoscroll} onChange={(e) => setAutoscroll(e.target.checked)} />
-          Auto-scroll
-        </label>
-        <button
-          type="button"
-          className="btn"
-          onClick={() => navigator.clipboard?.writeText(visible.join("\n"))}
-        >
-          Copy
-        </button>
-        <a className="btn" href={`/api/v1/deployments/${deploymentId}/logs?durable=1`}>
-          Download
-        </a>
-        <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--color-fg-muted)" }}>
-          {visible.length} lines {live ? "· streaming" : ""}
-        </span>
-      </div>
-      <div className="log-view" ref={ref}>
-        {visible.length === 0
-          ? "No log output retained for this deployment."
-          : visible.map((line, i) => (
-              <div key={i} className={/error|failed|fatal/i.test(line) ? "log-line-error" : undefined}>
-                {line}
-              </div>
-            ))}
-      </div>
-    </div>
-  );
-}
-
-export function AIConfigForm({ csrf, projectId, provider, model }: { csrf: string; projectId: string; provider: string | null; model: string | null }) {
-  const router = useRouter();
-  const [form, setForm] = useState({
-    provider: provider ?? "anthropic",
-    model: model ?? "claude-sonnet-4-5",
-    apiKey: "",
-    baseUrl: "",
-    dailyBudgetCents: 500,
-  });
-  const [status, setStatus] = useState<string | null>(null);
-
-  return (
-    <form
-      className="grid gap-3 p-3.5 md:grid-cols-2"
-      onSubmit={async (e) => {
-        e.preventDefault();
-        try {
-          await api(`/api/v1/projects/${projectId}/ai`, {
-            method: "POST",
-            csrf,
-            body: JSON.stringify({ action: "configure", ...form }),
-          });
-          setStatus("Provider saved");
-          setForm({ ...form, apiKey: "" });
-          router.refresh();
-        } catch (err) {
-          setStatus(err instanceof Error ? err.message : String(err));
-        }
-      }}
-    >
-      <div>
-        <label className="label" htmlFor="provider">
-          Provider
-        </label>
-        <select
-          id="provider"
-          className="select"
-          value={form.provider}
-          onChange={(e) => setForm({ ...form, provider: e.target.value })}
-        >
-          <option value="anthropic">anthropic</option>
-          <option value="openai">openai</option>
-          <option value="gemini">gemini</option>
-          <option value="openai-compatible">openai-compatible</option>
-        </select>
-      </div>
-      <div>
-        <label className="label" htmlFor="model">
-          Model
-        </label>
-        <input id="model" className="input" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} />
-      </div>
-      <div>
-        <label className="label" htmlFor="apiKey">
-          API key (BYOK)
-        </label>
-        <input
-          id="apiKey"
-          className="input"
-          type="password"
-          placeholder="stored encrypted"
-          value={form.apiKey}
-          onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
-        />
-      </div>
-      <div>
-        <label className="label" htmlFor="baseUrl">
-          Base URL (optional)
-        </label>
-        <input id="baseUrl" className="input" value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} />
-      </div>
-      <div className="md:col-span-2 flex items-center gap-3">
-        <button className="btn btn-primary" type="submit">
-          Save provider
-        </button>
-        {status ? <span style={{ fontSize: 11.5, color: "var(--color-fg-muted)" }}>{status}</span> : null}
-      </div>
-    </form>
+    <pre className="mono overflow-auto p-3" style={{ maxHeight: 420, fontSize: 11, lineHeight: 1.6 }}>
+      {lines.join("\n") || "Waiting for deployment output…"}
+    </pre>
   );
 }
