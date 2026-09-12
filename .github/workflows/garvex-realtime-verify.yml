@@ -1,0 +1,36 @@
+name: Garvex realtime verification
+
+on:
+  push:
+    branches:
+      - feat/garvex-realtime-voice
+  pull_request:
+    paths:
+      - "src/**"
+      - "voice-agent/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".env.example"
+      - ".github/workflows/garvex-realtime-verify.yml"
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx eslint .
+
+  voice-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m compileall -q voice-agent
