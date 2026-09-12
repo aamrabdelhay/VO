@@ -5,6 +5,7 @@ import {
   isPlatformSecretKey,
   listPlatformSecretMetadata,
   setPlatformSecret,
+  verifyPlatformSecret,
 } from "@/lib/platform-secrets";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +17,7 @@ export async function GET() {
   });
 }
 
-type Body = { key: string; value?: string; action?: "set" | "delete" };
+type Body = { key: string; value?: string; action?: "set" | "delete" | "verify" };
 
 export async function POST(request: Request) {
   return handle(async () => {
@@ -26,6 +27,10 @@ export async function POST(request: Request) {
     requireFields(body, ["key"]);
     if (!isPlatformSecretKey(body.key)) throw new HttpError(400, "Unsupported platform secret");
 
+    if (body.action === "verify") {
+      return ok({ check: await verifyPlatformSecret(body.key, body.value) });
+    }
+
     if (body.action === "delete") {
       await deletePlatformSecret(body.key);
       return ok({ deleted: true });
@@ -33,6 +38,7 @@ export async function POST(request: Request) {
 
     requireFields(body, ["value"]);
     await setPlatformSecret(body.key, body.value!, user.id);
-    return ok({ saved: true, key: body.key });
+    const check = await verifyPlatformSecret(body.key, body.value);
+    return ok({ saved: true, key: body.key, check });
   });
 }
