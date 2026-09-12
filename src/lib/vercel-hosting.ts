@@ -31,9 +31,7 @@ async function vercelRequest<T>(path: string, init: RequestInit = {}): Promise<T
   let data: unknown = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { error: { message: text || `Vercel request failed (${response.status})` } }; }
   if (!response.ok) {
-    const message = typeof data === "object" && data && "error" in data
-      ? String((data as { error?: { message?: unknown } }).error?.message ?? `HTTP ${response.status}`)
-      : `HTTP ${response.status}`;
+    const message = typeof data === "object" && data && "error" in data ? String((data as { error?: { message?: unknown } }).error?.message ?? `HTTP ${response.status}`) : `HTTP ${response.status}`;
     throw new Error(`Vercel API ${response.status}: ${message}`);
   }
   return data as T;
@@ -58,29 +56,12 @@ async function ensureVercelProject(project: Project) {
   const name = vercelProjectName(project);
   try { return await vercelRequest<{ id: string; name: string }>(`/v9/projects/${encodeURIComponent(name)}${await teamQuery()}`); }
   catch (error) { if (!(error instanceof Error) || !error.message.includes("Vercel API 404")) throw error; }
-  return vercelRequest<{ id: string; name: string }>(`/v11/projects${await teamQuery()}`, {
-    method: "POST",
-    body: JSON.stringify({
-      name,
-      gitRepository: { type: "github", repo: project.repoFullName },
-      ...(project.framework ? { framework: project.framework } : {}),
-      ...(project.rootDirectory !== "." ? { rootDirectory: project.rootDirectory } : {}),
-      ...(project.installCommand ? { installCommand: project.installCommand } : {}),
-      ...(project.buildCommand ? { buildCommand: project.buildCommand } : {}),
-      ...(project.outputDirectory ? { outputDirectory: project.outputDirectory } : {}),
-      skipGitConnectDuringLink: true,
-    }),
-  });
+  return vercelRequest<{ id: string; name: string }>(`/v11/projects${await teamQuery()}`, { method: "POST", body: JSON.stringify({ name, gitRepository: { type: "github", repo: project.repoFullName }, ...(project.framework ? { framework: project.framework } : {}), ...(project.rootDirectory !== "." ? { rootDirectory: project.rootDirectory } : {}), ...(project.installCommand ? { installCommand: project.installCommand } : {}), ...(project.buildCommand ? { buildCommand: project.buildCommand } : {}), ...(project.outputDirectory ? { outputDirectory: project.outputDirectory } : {}), skipGitConnectDuringLink: true }) });
 }
 
 async function syncEnvironment(project: Project, vercelProjectId: string) {
   const rows = await db.select().from(envVars).where(and(eq(envVars.projectId, project.id), eq(envVars.scope, "PRODUCTION")));
-  for (const row of rows) {
-    await vercelRequest(`/v10/projects/${encodeURIComponent(vercelProjectId)}/env${await teamQuery()}`, {
-      method: "POST",
-      body: JSON.stringify({ key: row.key, value: decryptSecret(row.cipher), type: "sensitive", target: ["production"] }),
-    });
-  }
+  for (const row of rows) await vercelRequest(`/v10/projects/${encodeURIComponent(vercelProjectId)}/env${await teamQuery()}`, { method: "POST", body: JSON.stringify({ key: row.key, value: decryptSecret(row.cipher), type: "sensitive", target: ["production"] }) });
 }
 
 async function assignFreeAlias(deploymentId: string, project: Project) {
@@ -108,10 +89,7 @@ export async function launchDeploymentNow(deployment: Deployment, project: Proje
   const started = await transition(deployment.id, "BUILDING", { buildStartedAt: new Date() }, { event: "VERCEL_BUILD_STARTED", message: "Deployment handed to Vercel hosting" });
   if (!started) throw new Error("Deployment could not enter BUILDING state");
   try { return await startVercelDeployment(project, { ...deployment, status: "BUILDING" }); }
-  catch (error) {
-    await transition(deployment.id, "FAILED", { finishedAt: new Date(), errorReason: error instanceof Error ? error.message : String(error) }, { event: "VERCEL_HANDOFF_FAILED", message: error instanceof Error ? error.message : String(error) });
-    throw error;
-  }
+  catch (error) { await transition(deployment.id, "FAILED", { finishedAt: new Date(), errorReason: error instanceof Error ? error.message : String(error) }, { event: "VERCEL_HANDOFF_FAILED", message: error instanceof Error ? error.message : String(error) }); throw error; }
 }
 
 export async function startVercelDeployment(project: Project, deployment: Deployment) {
@@ -119,29 +97,16 @@ export async function startVercelDeployment(project: Project, deployment: Deploy
   const vercelProject = await ensureVercelProject(project);
   await syncEnvironment(project, vercelProject.id).catch(async (error) => { await recordEvent(deployment.id, project.id, "VERCEL_ENV_SYNC_WARNING", error instanceof Error ? error.message : String(error)); });
   const { org, repo } = repoParts(project.repoFullName);
-  const created = await vercelRequest<{ id: string; url?: string; readyState?: string }>(`/v13/deployments${await teamQuery()}`, {
-    method: "POST",
-    body: JSON.stringify({
-      name: vercelProject.name,
-      project: vercelProject.id,
-      target: "production",
-      forceNew: "1",
-      skipAutoDetectionConfirmation: "1",
-      gitSource: { type: "github", org, repo, ref: deployment.branch, sha: deployment.commitSha },
-      gitMetadata: { remoteUrl: `https://github.com/${project.repoFullName}`, commitRef: deployment.branch, commitSha: deployment.commitSha, commitMessage: deployment.commitMessage ?? "VO deployment", commitAuthorName: deployment.commitAuthor ?? "VO" },
-      projectSettings: {
-        ...(project.framework ? { framework: project.framework } : {}),
-        ...(project.buildCommand ? { buildCommand: project.buildCommand } : {}),
-        ...(project.installCommand ? { installCommand: project.installCommand } : {}),
-        ...(project.outputDirectory ? { outputDirectory: project.outputDirectory } : {}),
-        ...(project.rootDirectory !== "." ? { rootDirectory: project.rootDirectory } : {}),
-      },
-    }),
-  });
+  const created = await vercelRequest<{ id: string; url?: string; readyState?: string }>(`/v13/deployments${await teamQuery()}`, { method: "POST", body: JSON.stringify({ name: vercelProject.name, project: vercelProject.id, target: "production", forceNew: "1", skipAutoDetectionConfirmation: "1", gitSource: { type: "github", org, repo, ref: deployment.branch, sha: deployment.commitSha }, gitMetadata: { remoteUrl: `https://github.com/${project.repoFullName}`, commitRef: deployment.branch, commitSha: deployment.commitSha, commitMessage: deployment.commitMessage ?? "VO deployment", commitAuthorName: deployment.commitAuthor ?? "VO" }, projectSettings: { ...(project.framework ? { framework: project.framework } : {}), ...(project.buildCommand ? { buildCommand: project.buildCommand } : {}), ...(project.installCommand ? { installCommand: project.installCommand } : {}), ...(project.outputDirectory ? { outputDirectory: project.outputDirectory } : {}), ...(project.rootDirectory !== "." ? { rootDirectory: project.rootDirectory } : {}) } }) });
+
   const temporaryUrl = created.url ? `https://${created.url}` : null;
-  await db.update(deployments).set({ imageRef: `vercel:${created.id}`, runtimeDriver: "vercel", hostId: "vercel", url: temporaryUrl, updatedAt: new Date() }).where(eq(deployments.id, deployment.id));
-  await recordEvent(deployment.id, project.id, "VERCEL_DEPLOYMENT_CREATED", `Vercel deployment ${created.id} created for ${deployment.commitSha.slice(0, 7)}`, { vercelDeploymentId: created.id, url: temporaryUrl });
-  return { vercelDeploymentId: created.id, url: temporaryUrl };
+  let stableUrl = temporaryUrl;
+  try { stableUrl = `https://${await assignFreeAlias(created.id, project)}`; }
+  catch (error) { await recordEvent(deployment.id, project.id, "FREE_DOMAIN_PENDING", error instanceof Error ? error.message : String(error)); }
+
+  await db.update(deployments).set({ imageRef: `vercel:${created.id}`, runtimeDriver: "vercel", hostId: "vercel", url: stableUrl, updatedAt: new Date() }).where(eq(deployments.id, deployment.id));
+  await recordEvent(deployment.id, project.id, "VERCEL_DEPLOYMENT_CREATED", `Vercel deployment ${created.id} created for ${deployment.commitSha.slice(0, 7)}`, { vercelDeploymentId: created.id, url: stableUrl });
+  return { vercelDeploymentId: created.id, url: stableUrl };
 }
 
 export async function syncVercelDeployment(deployment: Deployment) {
