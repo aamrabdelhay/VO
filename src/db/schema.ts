@@ -133,6 +133,22 @@ export const organizations = pgTable(
   (t) => [uniqueIndex("orgs_slug_uq").on(t.slug)],
 );
 
+export const memberships = pgTable(
+  "memberships",
+  {
+    id: id(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    role: roleEnum("role").notNull().default("DEVELOPER"),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("membership_uq").on(t.orgId, t.userId)],
+);
+
 /* ----------------------------------------------------------------- github */
 
 export const githubInstallations = pgTable(
@@ -145,6 +161,7 @@ export const githubInstallations = pgTable(
     installationId: text("installation_id").notNull(),
     accountLogin: text("account_login").notNull(),
     accountType: text("account_type").notNull().default("User"),
+    // Personal access token (encrypted) used when no GitHub App is configured.
     tokenCipher: jsonb("token_cipher"),
     createdAt: createdAt(),
   },
@@ -199,13 +216,13 @@ export const projects = pgTable(
       .references(() => organizations.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     slug: text("slug").notNull(),
-    freeDomain: text("free_domain").notNull(),
     repoFullName: text("repo_full_name").notNull(),
     repoUrl: text("repo_url").notNull(),
     productionBranch: text("production_branch").notNull().default("main"),
     enabled: boolean("enabled").notNull().default(true),
     previewsEnabled: boolean("previews_enabled").notNull().default(true),
 
+    // desired vs observed state
     desiredCommitSha: text("desired_commit_sha"),
     desiredDeploymentId: text("desired_deployment_id"),
     currentHealthyDeploymentId: text("current_healthy_deployment_id"),
@@ -214,6 +231,7 @@ export const projects = pgTable(
     deploymentGeneration: integer("deployment_generation").notNull().default(0),
     deploymentCounter: integer("deployment_counter").notNull().default(0),
 
+    // build configuration
     rootDirectory: text("root_directory").notNull().default("."),
     packageManager: text("package_manager"),
     installCommand: text("install_command"),
@@ -226,6 +244,7 @@ export const projects = pgTable(
     runtimePort: integer("runtime_port").notNull().default(3000),
     configVersion: integer("config_version").notNull().default(1),
 
+    // health check policy
     healthPath: text("health_path").notNull().default("/"),
     healthExpectedStatus: integer("health_expected_status").notNull().default(200),
     healthTimeoutMs: integer("health_timeout_ms").notNull().default(5000),
@@ -235,16 +254,19 @@ export const projects = pgTable(
     postPromotionWindowMs: integer("post_promotion_window_ms").notNull().default(120000),
     autoRollback: boolean("auto_rollback").notNull().default(true),
 
+    // resource limits
     memoryLimitMb: integer("memory_limit_mb").notNull().default(512),
     cpuLimit: doublePrecision("cpu_limit").notNull().default(1),
     pidsLimit: integer("pids_limit").notNull().default(256),
     buildTimeoutMs: integer("build_timeout_ms").notNull().default(15 * 60 * 1000),
 
+    // retention policy
     retainProductionDeployments: integer("retain_production_deployments").notNull().default(10),
     previewRetentionDays: integer("preview_retention_days").notNull().default(7),
     cacheRetentionDays: integer("cache_retention_days").notNull().default(30),
     logRetentionDays: integer("log_retention_days").notNull().default(90),
 
+    // ai policy
     aiPermission: aiPermissionEnum("ai_permission").notNull().default("READ_ONLY"),
     aiAutoDiagnose: boolean("ai_auto_diagnose").notNull().default(true),
     aiMaxFixAttempts: integer("ai_max_fix_attempts").notNull().default(3),
@@ -257,7 +279,6 @@ export const projects = pgTable(
   },
   (t) => [
     uniqueIndex("projects_slug_uq").on(t.slug),
-    uniqueIndex("projects_free_domain_uq").on(t.freeDomain),
     index("projects_org_idx").on(t.orgId),
     index("projects_repo_idx").on(t.repoFullName),
   ],
@@ -343,6 +364,7 @@ export const deploymentEvents = pgTable(
   (t) => [index("deployment_events_idx").on(t.deploymentId, t.createdAt)],
 );
 
+// Bounded live log tail. Durable full logs live in object storage.
 export const deploymentLogChunks = pgTable(
   "deployment_log_chunks",
   {
@@ -419,6 +441,8 @@ export const hosts = pgTable(
   },
 );
 
+/* ------------------------------------------------------------ health / metrics */
+
 export const healthCheckResults = pgTable(
   "health_check_results",
   {
@@ -437,6 +461,7 @@ export const healthCheckResults = pgTable(
   (t) => [index("health_result_idx").on(t.deploymentId, t.checkedAt)],
 );
 
+// Aggregated (low frequency) metric roll-ups only. High frequency samples belong in Prometheus.
 export const resourceMetrics = pgTable(
   "resource_metrics",
   {
@@ -455,6 +480,8 @@ export const resourceMetrics = pgTable(
   (t) => [index("metrics_idx").on(t.projectId, t.recordedAt)],
 );
 
+/* ---------------------------------------------------------------- domains */
+
 export const domains = pgTable(
   "domains",
   {
@@ -463,7 +490,7 @@ export const domains = pgTable(
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
     domain: text("domain").notNull(),
-    kind: text("kind").notNull().default("custom"),
+    kind: text("kind").notNull().default("custom"), // platform | custom | preview
     status: domainStatusEnum("status").notNull().default("PENDING"),
     verificationToken: text("verification_token"),
     verificationMethod: text("verification_method").notNull().default("CNAME"),
@@ -478,6 +505,8 @@ export const domains = pgTable(
   (t) => [uniqueIndex("domain_uq").on(t.domain), index("domain_project_idx").on(t.projectId)],
 );
 
+/* ----------------------------------------------------------------- env vars */
+
 export const envVars = pgTable(
   "env_vars",
   {
@@ -489,11 +518,133 @@ export const envVars = pgTable(
     scope: envScopeEnum("scope").notNull().default("PRODUCTION"),
     cipher: jsonb("cipher").notNull(),
     lastFour: text("last_four"),
+    version: integer("version").notNull().default(1),
+    createdBy: text("created_by"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [uniqueIndex("env_var_uq").on(t.projectId, t.key, t.scope)],
+  (t) => [uniqueIndex("env_var_uq").on(t.projectId, t.scope, t.key)],
 );
+
+export const secretVersions = pgTable("secret_versions", {
+  id: id(),
+  envVarId: text("env_var_id")
+    .notNull()
+    .references(() => envVars.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(),
+  cipher: jsonb("cipher").notNull(),
+  createdBy: text("created_by"),
+  createdAt: createdAt(),
+});
+
+/* --------------------------------------------------------------------- ai */
+
+export const aiConfigs = pgTable(
+  "ai_configs",
+  {
+    id: id(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull().default("anthropic"),
+    model: text("model").notNull().default("claude-sonnet-4-5"),
+    baseUrl: text("base_url"),
+    apiKeyCipher: jsonb("api_key_cipher"),
+    temperature: doublePrecision("temperature").notNull().default(0.1),
+    maxTokens: integer("max_tokens").notNull().default(4096),
+    dailyBudgetCents: integer("daily_budget_cents").notNull().default(500),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("ai_config_org_uq").on(t.orgId)],
+);
+
+export const aiConversations = pgTable("ai_conversations", {
+  id: id(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  deploymentId: text("deployment_id"),
+  title: text("title").notNull().default("Session"),
+  permission: aiPermissionEnum("permission").notNull().default("READ_ONLY"),
+  status: text("status").notNull().default("open"),
+  createdBy: text("created_by"),
+  createdAt: createdAt(),
+});
+
+export const aiMessages = pgTable(
+  "ai_messages",
+  {
+    id: id(),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => aiConversations.id, { onDelete: "cascade" }),
+    role: text("role").notNull(),
+    content: text("content").notNull(),
+    tokensIn: integer("tokens_in").notNull().default(0),
+    tokensOut: integer("tokens_out").notNull().default(0),
+    costCents: doublePrecision("cost_cents").notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [index("ai_msg_idx").on(t.conversationId, t.createdAt)],
+);
+
+export const aiToolCalls = pgTable("ai_tool_calls", {
+  id: id(),
+  conversationId: text("conversation_id")
+    .notNull()
+    .references(() => aiConversations.id, { onDelete: "cascade" }),
+  projectId: text("project_id").notNull(),
+  tool: text("tool").notNull(),
+  args: jsonb("args"),
+  allowed: boolean("allowed").notNull(),
+  denyReason: text("deny_reason"),
+  result: jsonb("result"),
+  durationMs: integer("duration_ms"),
+  createdAt: createdAt(),
+});
+
+export const aiActions = pgTable("ai_actions", {
+  id: id(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  deploymentId: text("deployment_id"),
+  conversationId: text("conversation_id"),
+  kind: text("kind").notNull(), // DIAGNOSIS | FIX | ROLLBACK_SUGGESTION
+  status: text("status").notNull().default("running"),
+  provider: text("provider"),
+  model: text("model"),
+  summary: text("summary"),
+  detail: jsonb("detail"),
+  costCents: doublePrecision("cost_cents").notNull().default(0),
+  createdBy: text("created_by").notNull().default("system"),
+  createdAt: createdAt(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+});
+
+export const aiFixAttempts = pgTable("ai_fix_attempts", {
+  id: id(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  deploymentId: text("deployment_id"),
+  actionId: text("action_id"),
+  attempt: integer("attempt").notNull().default(1),
+  branch: text("branch"),
+  diff: text("diff"),
+  filesChanged: jsonb("files_changed"),
+  testsPassed: boolean("tests_passed"),
+  buildPassed: boolean("build_passed"),
+  previewDeploymentId: text("preview_deployment_id"),
+  outcome: text("outcome").notNull().default("pending"),
+  stopReason: text("stop_reason"),
+  workspacePath: text("workspace_path"),
+  createdAt: createdAt(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+});
+
+/* ------------------------------------------------------------- operations */
 
 export const jobs = pgTable(
   "jobs",
@@ -501,23 +652,26 @@ export const jobs = pgTable(
     id: id(),
     type: text("type").notNull(),
     queue: text("queue").notNull().default("default"),
+    dedupeKey: text("dedupe_key"),
+    payload: jsonb("payload").notNull(),
     status: jobStatusEnum("status").notNull().default("QUEUED"),
     priority: integer("priority").notNull().default(100),
-    payload: jsonb("payload").notNull(),
-    dedupeKey: text("dedupe_key"),
-    runAt: timestamp("run_at", { withTimezone: true }).notNull().defaultNow(),
     attempts: integer("attempts").notNull().default(0),
     maxAttempts: integer("max_attempts").notNull().default(3),
+    runAt: timestamp("run_at", { withTimezone: true }).notNull().defaultNow(),
     lockedAt: timestamp("locked_at", { withTimezone: true }),
     lockedBy: text("locked_by"),
     lastError: text("last_error"),
-    projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
+    projectId: text("project_id"),
     correlationId: text("correlation_id"),
-    finishedAt: timestamp("finished_at", { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
-  (t) => [index("job_queue_idx").on(t.status, t.runAt, t.priority), uniqueIndex("job_dedupe_uq").on(t.dedupeKey)],
+  (t) => [
+    uniqueIndex("job_dedupe_uq").on(t.dedupeKey),
+    index("job_poll_idx").on(t.status, t.runAt),
+  ],
 );
 
 export const jobRuns = pgTable("job_runs", {
@@ -533,46 +687,67 @@ export const jobRuns = pgTable("job_runs", {
   createdAt: createdAt(),
 });
 
-export const notifications = pgTable("notifications", {
-  id: id(),
-  userId: text("user_id")
-    .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
-  kind: text("kind").notNull(),
-  title: text("title").notNull(),
-  body: text("body"),
-  readAt: timestamp("read_at", { withTimezone: true }),
-  createdAt: createdAt(),
-});
+export const auditLogs = pgTable(
+  "audit_logs",
+  {
+    id: id(),
+    orgId: text("org_id"),
+    projectId: text("project_id"),
+    actorId: text("actor_id"),
+    actorType: text("actor_type").notNull().default("user"),
+    action: text("action").notNull(),
+    resourceType: text("resource_type").notNull(),
+    resourceId: text("resource_id"),
+    oldState: jsonb("old_state"),
+    newState: jsonb("new_state"),
+    ip: text("ip"),
+    userAgent: text("user_agent"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("audit_project_idx").on(t.projectId, t.createdAt)],
+);
 
-export const auditEvents = pgTable("audit_events", {
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: id(),
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id"),
+    type: text("type").notNull(),
+    severity: text("severity").notNull().default("info"),
+    title: text("title").notNull(),
+    body: text("body"),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("notification_org_idx").on(t.orgId, t.createdAt)],
+);
+
+export const cleanupRuns = pgTable("cleanup_runs", {
   id: id(),
-  orgId: text("org_id")
-    .notNull()
-    .references(() => organizations.id, { onDelete: "cascade" }),
-  projectId: text("project_id"),
-  actorId: text("actor_id"),
-  action: text("action").notNull(),
-  resourceType: text("resource_type").notNull(),
-  resourceId: text("resource_id"),
-  oldState: jsonb("old_state"),
-  newState: jsonb("new_state"),
-  ip: text("ip"),
-  userAgent: text("user_agent"),
-  createdAt: createdAt(),
+  kind: text("kind").notNull(),
+  status: text("status").notNull().default("running"),
+  itemsScanned: integer("items_scanned").notNull().default(0),
+  itemsDeleted: integer("items_deleted").notNull().default(0),
+  itemsSkipped: integer("items_skipped").notNull().default(0),
+  bytesReclaimed: bigint("bytes_reclaimed", { mode: "number" }).notNull().default(0),
+  detail: jsonb("detail"),
+  error: text("error"),
+  startedAt: createdAt(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
 });
 
 export const incidents = pgTable("incidents", {
   id: id(),
-  orgId: text("org_id")
-    .notNull()
-    .references(() => organizations.id, { onDelete: "cascade" }),
   projectId: text("project_id"),
-  deploymentId: text("deployment_id"),
-  severity: text("severity").notNull().default("warning"),
+  severity: text("severity").notNull().default("major"),
+  kind: text("kind").notNull(),
   title: text("title").notNull(),
-  body: text("body"),
-  status: text("status").notNull().default("open"),
-  createdAt: createdAt(),
+  cause: text("cause"),
+  actions: jsonb("actions"),
+  startedAt: createdAt(),
+  detectedAt: timestamp("detected_at", { withTimezone: true }).notNull().defaultNow(),
   resolvedAt: timestamp("resolved_at", { withTimezone: true }),
 });
+
+export const schemaSql = sql;
