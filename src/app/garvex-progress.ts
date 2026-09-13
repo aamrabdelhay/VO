@@ -1,0 +1,1 @@
+export const GARVEX_PROGRESS = ["Analyzing request…", "Selecting the best available engine…", "Checking the available capabilities…", "Generating response…"];
