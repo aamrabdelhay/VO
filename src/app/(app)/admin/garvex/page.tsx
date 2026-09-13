@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { projects } from "@/db/schema";
 import { getGarvexProviderStatus } from "@/lib/ai/provider";
 import { freeDomainForProject } from "@/lib/vercel-hosting";
-import { GarvexMaxConsole } from "@/components/garvex-max-console";
+import { GarvexMaxConsoleV3 } from "@/components/garvex-max-console-v3";
 
 export const dynamic = "force-dynamic";
 
@@ -16,9 +16,6 @@ export default async function GarvexPage() {
     ? await db.select({ id: projects.id, name: projects.name, repoFullName: projects.repoFullName }).from(projects).where(eq(projects.orgId, membership.org.id)).orderBy(desc(projects.updatedAt)).limit(100)
     : [];
   const projectList = await Promise.all(rows.map(async (project) => ({ ...project, liveUrl: `https://${await freeDomainForProject({ ...project } as typeof projects.$inferSelect)}` })));
-  const typedProviders = providers.map((provider) => ({
-    ...provider,
-    state: provider.state as "ready" | "stored-unreadable" | "missing",
-  }));
-  return <GarvexMaxConsole csrf={user.csrfToken} providers={typedProviders} projects={projectList} isPlatformAdmin={user.isPlatformAdmin} />;
+  const typedProviders = providers.map((provider) => ({ ...provider, state: provider.state as "ready" | "stored-unreadable" | "missing" }));
+  return <GarvexMaxConsoleV3 csrf={user.csrfToken} providers={typedProviders} projects={projectList} isPlatformAdmin={user.isPlatformAdmin} />;
 }
