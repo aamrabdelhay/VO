@@ -20,31 +20,13 @@ export const NVIDIA_REQUESTED_MODELS = {
 } as const;
 
 export type NvidiaModelId = (typeof NVIDIA_MODELS)[keyof typeof NVIDIA_MODELS];
-export type NvidiaCapability =
-  | "text"
-  | "reasoning"
-  | "coding"
-  | "function-calling"
-  | "structured-output"
-  | "image-understanding"
-  | "video-understanding"
-  | "audio-understanding"
-  | "ocr"
-  | "image-only-understanding"
-  | "video-generation"
-  | "realtime-voice"
-  | "text-to-speech";
-
-export type NvidiaModelInfo = {
-  id: NvidiaModelId;
-  label: string;
-  endpoint: string;
-  freeEndpoint: boolean;
-  chatCompletions: boolean;
-  capabilities: readonly NvidiaCapability[];
-  maxInputMb?: number;
-  note?: string;
-};
+export type NvidiaPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } }
+  | { type: "video_url"; video_url: { url: string } }
+  | { type: "audio_url"; audio_url: { url: string } };
+export type NvidiaCapability = "text" | "reasoning" | "coding" | "function-calling" | "structured-output" | "image-understanding" | "video-understanding" | "audio-understanding" | "ocr" | "image-only-understanding" | "video-generation" | "realtime-voice" | "text-to-speech";
+export type NvidiaModelInfo = { id: NvidiaModelId; label: string; endpoint: string; freeEndpoint: boolean; chatCompletions: boolean; capabilities: readonly NvidiaCapability[]; maxInputMb?: number; note?: string };
 
 export const NVIDIA_MODEL_CATALOG: readonly NvidiaModelInfo[] = [
   { id: NVIDIA_MODELS.deepseekV4, label: "DeepSeek V4 Flash", endpoint: `${NVIDIA_BASE_URL}/chat/completions`, freeEndpoint: true, chatCompletions: true, capabilities: ["text", "reasoning", "coding", "function-calling", "structured-output"] },
