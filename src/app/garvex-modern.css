@@ -1,0 +1,11 @@
+/* Garvex chat layout overrides — center-first, drawer-based control plane. */
+.garvex-v3-shell .garvex-v3-body{position:relative}
+.garvex-v3-shell .garvex-v3-main{position:relative}
+.garvex-v3-shell .garvex-history{box-shadow:24px 0 70px rgba(0,0,0,.38)}
+.garvex-v3-shell .garvex-v3-workspace{box-shadow:-24px 0 70px rgba(0,0,0,.38)}
+.garvex-v3-shell .garvex-v3-scroll{padding-left:clamp(18px,5vw,72px);padding-right:clamp(18px,5vw,72px)}
+.garvex-v3-shell .garvex-v3-composer-wrap{padding-left:clamp(12px,4vw,52px);padding-right:clamp(12px,4vw,52px)}
+.garvex-v3-shell .garvex-v3-welcome{padding-top:9vh}
+.garvex-v3-shell .garvex-v3-welcome h1{font-weight:650;letter-spacing:-.045em}
+.garvex-v3-shell .garvex-v3-quick button{background:rgba(17,20,25,.82);backdrop-filter:blur(10px)}
+.garvex-v3-shell .garvex-v3-composer{backdrop-filter:blur(16px);background:rgba(21,25,30,.96)}
