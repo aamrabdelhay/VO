@@ -14,6 +14,7 @@ export type JobType =
   | "reconcile"
   | "ai-diagnose"
   | "ai-fix"
+  | "ai-garvex"
   | "metrics-collect"
   | "domain-verify";
 
@@ -57,7 +58,52 @@ export async function enqueue(opts: EnqueueOptions): Promise<JobRecord | null> {
   return row;
 }
 
-export async function claimNextJob(workerId: string): Promise<JobRecord | null> {
+/**
+ * Claim the next due job. AI requests are isolated into a durable queue and
+ * guarded by a Postgres advisory transaction lock so multiple Vercel instances
+ * cannot concurrently consume the same AI rate-limit bucket.
+ */
+export async function claimNextJob(workerId: string, queue?: string): Promise<JobRecord | null> {
+  if (queue === "garvex-ai") {
+    const minIntervalMs = Math.max(250, Number(process.env.GARVEX_AI_MIN_INTERVAL_MS ?? 1200));
+    const rows = await db.execute<JobRecord>(sql`
+      with gate as (
+        select pg_try_advisory_xact_lock(hashtextextended('vo.garvex.ai', 0)) as acquired
+      ), candidate as (
+        select j.id
+        from jobs j
+        cross join gate g
+        where g.acquired
+          and j.queue = ${queue}
+          and j.status = 'QUEUED'
+          and j.run_at <= now()
+          and not exists (
+            select 1 from jobs running
+            where running.queue = ${queue} and running.status = 'RUNNING'
+          )
+          and not exists (
+            select 1
+            from job_runs recent_runs
+            join jobs recent_jobs on recent_jobs.id = recent_runs.job_id
+            where recent_jobs.queue = ${queue}
+              and recent_runs.created_at > now() - (${minIntervalMs} * interval '1 millisecond')
+          )
+        order by j.priority desc, j.run_at asc, j.created_at asc
+        for update skip locked
+        limit 1
+      )
+      update jobs
+      set status = 'RUNNING',
+          locked_at = now(),
+          locked_by = ${workerId},
+          attempts = attempts + 1,
+          updated_at = now()
+      where id = (select id from candidate)
+      returning *;
+    `);
+    return (rows.rows ?? [])[0] as JobRecord | undefined ?? null;
+  }
+
   const rows = await db.execute<JobRecord>(sql`
     update jobs set status = 'RUNNING',
                     locked_at = now(),
@@ -66,8 +112,10 @@ export async function claimNextJob(workerId: string): Promise<JobRecord | null> 
                     updated_at = now()
     where id = (
       select id from jobs
-      where status = 'QUEUED' and run_at <= now()
-      order by priority asc, run_at asc
+      where status = 'QUEUED'
+        ${queue ? sql`and queue = ${queue}` : sql``}
+        and run_at <= now()
+      order by priority desc, run_at asc, created_at asc
       for update skip locked
       limit 1
     )
@@ -90,12 +138,12 @@ export async function failJob(
   error: unknown,
   durationMs: number,
   workerId: string,
-  opts: { retryable?: boolean } = {},
+  opts: { retryable?: boolean; retryAfterMs?: number } = {},
 ) {
   const message = error instanceof Error ? error.message : String(error);
   const retryable = opts.retryable ?? true;
   const exhausted = !retryable || job.attempts >= job.maxAttempts;
-  const backoffMs = Math.min(60_000 * 5, 2 ** job.attempts * 1000);
+  const backoffMs = opts.retryAfterMs ?? Math.min(5 * 60_000, 2 ** job.attempts * 1000);
   await db
     .update(jobs)
     .set({
@@ -126,9 +174,7 @@ export async function recoverStaleJobs(staleMs = 10 * 60 * 1000) {
     .set({ status: "QUEUED", lockedBy: null, lockedAt: null, updatedAt: new Date() })
     .where(and(eq(jobs.status, "RUNNING"), lte(jobs.lockedAt, cutoff)))
     .returning({ id: jobs.id });
-  if (recovered.length) {
-    log.warn("Recovered stale jobs after worker restart", { count: recovered.length });
-  }
+  if (recovered.length) log.warn("Recovered stale jobs after worker restart", { count: recovered.length });
   return recovered.length;
 }
 
