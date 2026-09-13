@@ -7,6 +7,7 @@ import { notifications, projects } from "@/db/schema";
 import { getSessionUser, primaryOrg } from "@/lib/auth";
 import "../motion.css";
 import "../garvex-v3.css";
+import "../garvex-modern.css";
 
 export const dynamic = "force-dynamic";
 
