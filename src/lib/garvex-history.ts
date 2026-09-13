@@ -21,11 +21,11 @@ async function ensureTable() {
 
 export async function listGarvexChats(userId: string): Promise<GarvexHistoryItem[]> {
   await ensureTable();
-  const result = await db.execute<GarvexHistoryItem & { message_count: number | string; created_at: string; updated_at: string }>(sql`
-    select id,title,project_id,created_at,updated_at,jsonb_array_length(messages) as message_count
+  const result = await db.execute<{ id: string; title: string; projectId: string | null; messageCount: number | string; createdAt: string; updatedAt: string }>(sql`
+    select id, title, project_id as "projectId", created_at as "createdAt", updated_at as "updatedAt", jsonb_array_length(messages) as "messageCount"
     from garvex_chats where user_id=${userId} order by updated_at desc limit 100
   `);
-  return (result.rows ?? []).map((row) => ({ id: row.id, title: row.title, projectId: row.project_id, createdAt: row.created_at, updatedAt: row.updated_at, messageCount: Number(row.message_count ?? 0) }));
+  return (result.rows ?? []).map((row) => ({ id: row.id, title: row.title, projectId: row.projectId, createdAt: row.createdAt, updatedAt: row.updatedAt, messageCount: Number(row.messageCount ?? 0) }));
 }
 
 export async function getGarvexChat(userId: string, id: string) {
