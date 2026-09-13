@@ -5,7 +5,7 @@
     "dev": "next dev",
     "db:prepare:vercel": "node scripts/prepare-vercel-db.mjs",
     "db:push": "drizzle-kit push --config drizzle.config.ts --force",
-    "prebuild": "node -e \"const fs=require('fs');const p='src/lib/ai/provider.ts';let s=fs.readFileSync(p,'utf8');s=s.replace('const platform = keys.map','const platform: Candidate[] = keys.map');fs.writeFileSync(p,s)\" && npm run db:prepare:vercel",
+    "prebuild": "npm run db:prepare:vercel",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
