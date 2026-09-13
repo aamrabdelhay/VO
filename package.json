@@ -9,7 +9,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "garvex:local": "node scripts/garvex-local-runtime.mjs",
+    "garvex:benchmark": "node scripts/garvex-benchmark.mjs",
+    "garvex:version": "node scripts/garvex-version-registry.mjs",
+    "garvex:evolve": "node scripts/garvex-evolution-worker.mjs"
   },
   "dependencies": {
     "dotenv": "17.3.1",

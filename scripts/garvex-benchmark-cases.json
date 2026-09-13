@@ -1,0 +1,22 @@
+[
+  {
+    "id": "instruction-following",
+    "prompt": "Return exactly JSON with keys answer and constraints. answer must be the word PASS. constraints must be an array containing exactly two strings: no external API and preserve existing behavior.",
+    "checks": ["json", "answer:PASS", "constraints:no external API", "constraints:preserve existing behavior"]
+  },
+  {
+    "id": "debugging",
+    "prompt": "A JavaScript function does `const value = user.name.trim()` and crashes when user.name is missing. Explain the root cause in one sentence and give a safe one-line replacement using optional chaining and nullish coalescing.",
+    "checks": ["contains:user.name", "contains:?.", "contains:??", "contains:root cause"]
+  },
+  {
+    "id": "scope-control",
+    "prompt": "You are asked to add a local benchmark to an existing web app. State three rules that prevent breaking production: do not replace the production agent, do not use external AI APIs, and do not promote an untested candidate.",
+    "checks": ["contains:production agent", "contains:external AI", "contains:untested candidate"]
+  },
+  {
+    "id": "structured-reasoning",
+    "prompt": "Given: A benchmark has 80 tests and a candidate passes 68. Calculate the pass rate and state whether it is above 80%.",
+    "checks": ["contains:85%", "contains:above 80%"]
+  }
+]
