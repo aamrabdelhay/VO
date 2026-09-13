@@ -12,6 +12,7 @@ import { GarvexOrb } from "@/components/garvex-orb";
 import "@/app/garvex-file-reader.css";
 import "@/app/garvex-capability-panel.css";
 import "@/app/garvex-v4.css";
+import "@/app/garvex-overrides.css";
 
 export const dynamic = "force-dynamic";
 
@@ -25,12 +26,12 @@ export default async function GarvexPage() {
   const projectList = await Promise.all(rows.map(async (project) => ({ ...project, liveUrl: `https://${await freeDomainForProject({ ...project } as typeof projects.$inferSelect)}` })));
   const typedProviders = providers.map((provider) => ({ ...provider, state: provider.state as "ready" | "stored-unreadable" | "missing" }));
   return <>
-    <GarvexCapabilityPanel capabilities={capabilities} />
     <div className="garvex-v4-orb-wrap" aria-label="Garvex">
       <GarvexOrb size={180} />
       <span className="garvex-v4-orb-label">GARVEX CORE</span>
     </div>
     <GarvexChatV4 csrf={user.csrfToken} providers={typedProviders} projects={projectList} isPlatformAdmin={user.isPlatformAdmin} />
+    <GarvexCapabilityPanel capabilities={capabilities} />
     <GarvexFileReader csrf={user.csrfToken} />
   </>;
 }
