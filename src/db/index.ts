@@ -1,7 +1,8 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 
-const databaseUrl = process.env.DATABASE_URL;
+const isNextBuild = process.env.NEXT_PHASE === "phase-production-build";
+const databaseUrl = process.env.DATABASE_URL ?? (isNextBuild ? "postgresql://127.0.0.1:5432/vo_build_placeholder" : undefined);
 
 if (!databaseUrl) {
   throw new Error("DATABASE_URL is required");
