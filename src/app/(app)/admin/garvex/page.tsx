@@ -5,6 +5,8 @@ import { projects } from "@/db/schema";
 import { getGarvexProviderStatus } from "@/lib/ai/provider";
 import { freeDomainForProject } from "@/lib/vercel-hosting";
 import { GarvexMaxConsoleV3 } from "@/components/garvex-max-console-v3";
+import { GarvexFileReader } from "@/components/garvex-file-reader";
+import "../../../../garvex-file-reader.css";
 
 export const dynamic = "force-dynamic";
 
@@ -17,5 +19,5 @@ export default async function GarvexPage() {
     : [];
   const projectList = await Promise.all(rows.map(async (project) => ({ ...project, liveUrl: `https://${await freeDomainForProject({ ...project } as typeof projects.$inferSelect)}` })));
   const typedProviders = providers.map((provider) => ({ ...provider, state: provider.state as "ready" | "stored-unreadable" | "missing" }));
-  return <GarvexMaxConsoleV3 csrf={user.csrfToken} providers={typedProviders} projects={projectList} isPlatformAdmin={user.isPlatformAdmin} />;
+  return <><GarvexMaxConsoleV3 csrf={user.csrfToken} providers={typedProviders} projects={projectList} isPlatformAdmin={user.isPlatformAdmin} /><GarvexFileReader csrf={user.csrfToken} /></>;
 }
