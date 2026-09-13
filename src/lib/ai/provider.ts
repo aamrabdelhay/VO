@@ -26,7 +26,6 @@ export type ProviderOptions = { model: string; apiKey: string; baseUrl?: string 
 const PRICING: Record<string, { in: number; out: number }> = { default: { in: 0.03, out: 0.15 } };
 function estimateCost(tokensIn: number, tokensOut: number) { const p = PRICING.default; return (tokensIn / 1000) * p.in + (tokensOut / 1000) * p.out; }
 function textContent(content: ChatContent) { return typeof content === "string" ? content : content.filter((part) => part.type === "text").map((part) => part.text).join("\n"); }
-function nvidiaContent(messages: ChatMessage[]) { return messages; }
 
 class AnthropicProvider implements AIProvider {
   readonly name = "anthropic";
@@ -45,7 +44,7 @@ class AnthropicProvider implements AIProvider {
 class OpenAICompatibleProvider implements AIProvider {
   constructor(readonly name: string, private readonly defaultBase: string) {}
   async complete(messages: ChatMessage[], opts: ProviderOptions) {
-    const payloadMessages = this.name === "nvidia" ? nvidiaContent(messages) : messages.map((m) => ({ ...m, content: textContent(m.content) }));
+    const payloadMessages = this.name === "nvidia" ? messages : messages.map((m) => ({ ...m, content: textContent(m.content) }));
     const res = await fetch(`${(opts.baseUrl ?? this.defaultBase).replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` }, body: JSON.stringify({ model: opts.model, temperature: opts.temperature, max_tokens: opts.maxTokens, messages: payloadMessages }) });
     if (!res.ok) throw new Error(`${this.name} request failed (${res.status}): ${await res.text()}`);
     const data = (await res.json()) as { choices?: { message?: { content?: string | null } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
@@ -105,7 +104,7 @@ export async function resolveAIConfig(orgId: string): Promise<ResolvedAIConfig |
     if (!apiKey) return null;
     return { provider: config.provider, model: config.model, apiKey, baseUrl: config.baseUrl, temperature: config.temperature, maxTokens: config.maxTokens, dailyBudgetCents: config.dailyBudgetCents };
   }
-  const provider = process.env.AI_PROVIDER ?? "anthropic"; const apiKey = envKeyFor(provider); if (!apiKey) return null;
+  const provider = process.env.AI_PROVIDER ?? "nvidia"; const apiKey = envKeyFor(provider); if (!apiKey) return null;
   return { provider, model: process.env.AI_MODEL ?? defaultModel(provider), apiKey, baseUrl: process.env.AI_BASE_URL ?? null, temperature: 0.1, maxTokens: 4096, dailyBudgetCents: 500 };
 }
 function envKeyFor(provider: string) {
@@ -119,6 +118,7 @@ type Candidate = { provider: string; model: string; apiKey: string; credentialId
 const COUNCIL: { provider: string; key: string; model: string }[] = [
   { provider: "nvidia", key: "NVIDIA_API_KEY", model: NVIDIA_MODELS.deepseekV4 },
   { provider: "nvidia", key: "NVIDIA_API_KEY", model: NVIDIA_MODELS.deepseekV4Pro },
+  { provider: "nvidia", key: "NVIDIA_API_KEY", model: NVIDIA_MODELS.glm52 },
   { provider: "nvidia", key: "NVIDIA_API_KEY", model: NVIDIA_MODELS.nemotron35Lightning },
   { provider: "nvidia", key: "NVIDIA_API_KEY", model: NVIDIA_MODELS.omni },
   { provider: "openrouter", key: "OPENROUTER_API_KEY", model: "openrouter/free" },
@@ -159,8 +159,9 @@ async function waitForLocalRateSlot(key: string, minIntervalMs = 1000) {
 function errorStatus(error: unknown) { const match = String(error instanceof Error ? error.message : error).match(/\((4\d\d|5\d\d)\)/); return match ? Number(match[1]) : null; }
 function providerRequestKey(candidate: Candidate) { return `${candidate.provider}:${candidate.model}`; }
 function orderedCandidates(candidates: Candidate[]) {
-  const preferred = [NVIDIA_MODELS.deepseekV4, NVIDIA_MODELS.deepseekV4Pro, NVIDIA_MODELS.nemotron35Lightning, NVIDIA_MODELS.omni];
-  return [...candidates].sort((a, b) => preferred.indexOf(a.model) - preferred.indexOf(b.model));
+  const preferred = [NVIDIA_MODELS.deepseekV4, NVIDIA_MODELS.deepseekV4Pro, NVIDIA_MODELS.glm52, NVIDIA_MODELS.nemotron35Lightning, NVIDIA_MODELS.omni];
+  const rank = (model: string) => { const index = preferred.indexOf(model); return index === -1 ? preferred.length + 10 : index; };
+  return [...candidates].sort((a, b) => rank(a.model) - rank(b.model));
 }
 async function completeSingle(messages: ChatMessage[], candidates: Candidate[], timeoutMs: number) {
   let lastError: Error | null = null;
@@ -170,8 +171,7 @@ async function completeSingle(messages: ChatMessage[], candidates: Candidate[], 
       return await withTimeout(providerFor(candidate.provider).complete(messages, { model: candidate.model, apiKey: candidate.apiKey, temperature: 0.1, maxTokens: 4096 }), timeoutMs, `${candidate.provider}/${candidate.model}`);
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      const status = errorStatus(error);
-      if (status === 429) await new Promise((resolve) => setTimeout(resolve, 1500));
+      const status = errorStatus(error); if (status === 429) await new Promise((resolve) => setTimeout(resolve, 1500));
     }
   }
   throw lastError ?? new Error("No working Garvex credential is available.");
@@ -180,8 +180,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) {
 export async function multiAgentComplete(messages: ChatMessage[], opts?: { maxWorkers?: number; timeoutMs?: number; quorum?: number; strategy?: "single" | "complex" }) {
   const candidates = await configuredCouncil();
   if (!candidates.length) {
-    const statuses = await getGarvexProviderStatus();
-    const unreadable = statuses.filter((item) => item.stored > 0 && item.readable === 0).map((item) => item.provider);
+    const statuses = await getGarvexProviderStatus(); const unreadable = statuses.filter((item) => item.stored > 0 && item.readable === 0).map((item) => item.provider);
     throw new Error(unreadable.length ? `Garvex found ${unreadable.length} stored provider credential(s), but they cannot be decrypted in this deployment (${unreadable.join(", ")}). Re-save those keys in Platform Settings, and keep PLATFORM_ENCRYPTION_KEY stable across deployments.` : "No Garvex provider keys are configured. Add provider API keys in Platform Settings or Vercel environment variables.");
   }
   const timeoutMs = opts?.timeoutMs ?? 4500; const strategy = opts?.strategy ?? "single";
