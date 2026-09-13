@@ -2,7 +2,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { aiConfigs, aiMessages } from "@/db/schema";
 import { decryptSecret } from "@/lib/crypto";
-import { getPlatformSecret, getPlatformSecretValues } from "@/lib/platform-secrets";
+import { getPlatformSecret, getPlatformSecretValues, listPlatformSecretMetadata } from "@/lib/platform-secrets";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 export type CompletionResult = { text: string; tokensIn: number; tokensOut: number; costCents: number; provider: string; model: string };
@@ -18,7 +18,7 @@ class CohereProvider implements AIProvider { readonly name = "cohere"; async com
 export function providerFor(name: string): AIProvider { switch (name) { case "anthropic": return new AnthropicProvider(); case "gemini": return new GeminiProvider(); case "cohere": return new CohereProvider(); case "openai": return new OpenAICompatibleProvider("openai", "https://api.openai.com/v1"); case "nvidia": return new OpenAICompatibleProvider("nvidia", "https://integrate.api.nvidia.com/v1"); case "openrouter": return new OpenAICompatibleProvider("openrouter", "https://openrouter.ai/api/v1"); case "mistral": return new OpenAICompatibleProvider("mistral", "https://api.mistral.ai/v1"); case "cerebras": return new OpenAICompatibleProvider("cerebras", "https://api.cerebras.ai/v1"); case "groq": return new OpenAICompatibleProvider("groq", "https://api.groq.com/openai/v1"); case "kilo": return new OpenAICompatibleProvider("kilo", "https://api.kilo.ai/api/gateway"); default: return new OpenAICompatibleProvider(name, "https://api.openai.com/v1"); } }
 export type ResolvedAIConfig = ProviderOptions & { provider: string; dailyBudgetCents: number };
 export async function resolveAIConfig(orgId: string): Promise<ResolvedAIConfig | null> { const [config] = await db.select().from(aiConfigs).where(eq(aiConfigs.orgId, orgId)).limit(1); if (config) { let apiKey: string | null = null; if (config.apiKeyCipher) { try { apiKey = decryptSecret(config.apiKeyCipher); } catch { apiKey = null; } } apiKey = apiKey ?? envKeyFor(config.provider); if (!apiKey) return null; return { provider: config.provider, model: config.model, apiKey, baseUrl: config.baseUrl, temperature: config.temperature, maxTokens: config.maxTokens, dailyBudgetCents: config.dailyBudgetCents }; } const provider = process.env.AI_PROVIDER ?? "anthropic"; const apiKey = envKeyFor(provider); if (!apiKey) return null; return { provider, model: process.env.AI_MODEL ?? defaultModel(provider), apiKey, baseUrl: process.env.AI_BASE_URL ?? null, temperature: 0.1, maxTokens: 4096, dailyBudgetCents: 500 }; }
-function envKeyFor(provider: string) { if (provider === "anthropic") return process.env.ANTHROPIC_API_KEY ?? null; if (provider === "openai") return process.env.OPENAI_API_KEY ?? null; if (provider === "gemini") return process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? null; return process.env.AI_API_KEY ?? null; }
+function envKeyFor(provider: string) { const direct: Record<string, string> = { anthropic: "ANTHROPIC_API_KEY", openai: "OPENAI_API_KEY", gemini: "GEMINI_API_KEY", nvidia: "NVIDIA_API_KEY", openrouter: "OPENROUTER_API_KEY", mistral: "MISTRAL_API_KEY", cerebras: "CEREBRAS_API_KEY", groq: "GROQ_API_KEY", kilo: "KILO_API_KEY", cohere: "COHERE_API_KEY" }; return process.env[direct[provider] ?? "AI_API_KEY"] ?? (provider === "gemini" ? process.env.GOOGLE_API_KEY ?? null : null); }
 function defaultModel(provider: string) { if (provider === "anthropic") return "claude-sonnet-4-5"; if (provider === "openai") return "gpt-4o-mini"; if (provider === "gemini") return "gemini-2.0-flash"; return "gpt-4o-mini"; }
 export async function spentTodayCents(orgId: string): Promise<number> { const rows = await db.execute<{ total: number }>(sql`select coalesce(sum(m.cost_cents), 0) as total from ${aiMessages} m join ai_conversations c on c.id = m.conversation_id join projects p on p.id = c.project_id where p.org_id = ${orgId} and m.created_at > now() - interval '1 day';`); return Number(rows.rows?.[0]?.total ?? 0); }
 
@@ -32,19 +32,30 @@ const COUNCIL: { provider: string; key: string; model: string }[] = [
   { provider: "cohere", key: "COHERE_API_KEY", model: "command-a" },
 ];
 
-type Candidate = { provider: string; model: string; apiKey: string; credentialId: string };
+type Candidate = { provider: string; model: string; apiKey: string; credentialId: string; source: "platform" | "environment" };
 function shuffle<T>(items: T[]): T[] { const copy = [...items]; for (let i = copy.length - 1; i > 0; i -= 1) { const j = Math.floor(Math.random() * (i + 1)); [copy[i], copy[j]] = [copy[j], copy[i]]; } return copy; }
+function envForKey(key: string) { return process.env[key] ?? null; }
 
 async function configuredCouncil(): Promise<Candidate[]> {
   const groups = await Promise.all(COUNCIL.map(async (candidate) => {
     const keys = await getPlatformSecretValues(candidate.key);
-    return keys.map((entry) => ({ provider: candidate.provider, model: candidate.model, apiKey: entry.value, credentialId: entry.id }));
+    const platform = keys.map((entry) => ({ provider: candidate.provider, model: candidate.model, apiKey: entry.value, credentialId: entry.id, source: "platform" as const }));
+    const env = envForKey(candidate.key);
+    if (env) platform.push({ provider: candidate.provider, model: candidate.model, apiKey: env, credentialId: `env:${candidate.key}`, source: "environment" });
+    return platform;
   }));
   return shuffle(groups.flat());
 }
 
 export async function getGarvexProviderStatus() {
-  return Promise.all(COUNCIL.map(async (item) => ({ provider: item.provider, model: item.model, configured: Boolean((await getPlatformSecretValues(item.key)).length) })));
+  const metadata = await listPlatformSecretMetadata();
+  return Promise.all(COUNCIL.map(async (item) => {
+    const stored = metadata.filter((entry) => entry.key === item.key).length;
+    let readable = 0;
+    try { readable = (await getPlatformSecretValues(item.key)).length; } catch { readable = 0; }
+    const env = Boolean(envForKey(item.key));
+    return { provider: item.provider, model: item.model, configured: readable > 0 || env, stored, readable, environment: env, state: readable > 0 || env ? "ready" : stored > 0 ? "stored-unreadable" : "missing" };
+  }));
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) { return new Promise<T>((resolve, reject) => { const timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs); promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); }); }); }
@@ -60,7 +71,11 @@ async function completeSingle(messages: ChatMessage[], candidates: Candidate[], 
 
 export async function multiAgentComplete(messages: ChatMessage[], opts?: { maxWorkers?: number; timeoutMs?: number; quorum?: number; strategy?: "single" | "complex" }) {
   const candidates = await configuredCouncil();
-  if (!candidates.length) throw new Error("No Garvex provider keys are configured. Add provider API keys in Platform Settings.");
+  if (!candidates.length) {
+    const statuses = await getGarvexProviderStatus();
+    const unreadable = statuses.filter((item) => item.stored > 0 && item.readable === 0).map((item) => item.provider);
+    throw new Error(unreadable.length ? `Garvex found ${unreadable.length} stored provider credential(s), but they cannot be decrypted in this deployment (${unreadable.join(", ")}). Re-save those keys in Platform Settings, and keep PLATFORM_ENCRYPTION_KEY stable across deployments.` : "No Garvex provider keys are configured. Add provider API keys in Platform Settings or Vercel environment variables.");
+  }
   const timeoutMs = opts?.timeoutMs ?? 4500;
   const strategy = opts?.strategy ?? "single";
   if (strategy === "single") {
