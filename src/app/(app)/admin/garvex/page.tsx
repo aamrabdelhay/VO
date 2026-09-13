@@ -9,7 +9,7 @@ import { GarvexChatV4 } from "@/components/garvex-chat-v4";
 import { GarvexFileReader } from "@/components/garvex-file-reader";
 import { GarvexCapabilityPanel } from "@/components/garvex-capability-panel";
 import "../../../garvex-file-reader.css";
-import "../../garvex-capability-panel.css";
+import "../../../garvex-capability-panel.css";
 
 export const dynamic = "force-dynamic";
 
