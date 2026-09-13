@@ -35,7 +35,12 @@ export async function POST(request: Request) {
     const history: ChatMessage[] = (body.history ?? []).slice(-10).filter((item) => item.content?.trim()).map((item) => ({ role: item.role, content: item.content.slice(0, 12000) }));
     const messages: ChatMessage[] = [{ role: "system", content: system }, ...history, { role: "user", content: `${prompt}${body.context ? `\n\nSelected project context (read-only):\n${body.context.slice(0, 30000)}` : ""}` }];
     const strategy = body.complex === false ? "single" : "complex";
-    const result = await queuedGarvexComplete(messages, strategy === "complex" ? { timeoutMs: 4500, maxWorkers: 12, quorum: 3, strategy } : { timeoutMs: 4500, strategy });
+    const result = await queuedGarvexComplete(
+      messages,
+      strategy === "complex"
+        ? { timeoutMs: 15000, maxWorkers: 8, quorum: 1, strategy }
+        : { timeoutMs: 15000, strategy },
+    );
     return ok({
       answer: result.text,
       provider: result.provider,
