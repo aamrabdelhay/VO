@@ -5,5 +5,5 @@ export const dynamic = "force-dynamic";
 
 export default async function IndexPage() {
   const user = await getSessionUser();
-  redirect(user ? "/dashboard" : "/login");
+  redirect(user ? "/admin/garvex" : "/login");
 }

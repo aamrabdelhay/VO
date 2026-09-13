@@ -1,0 +1,24 @@
+/* Garvex motion layer — inspired by premium scroll-driven product sites, without copying Tria assets. */
+.vo-app-shell { isolation: isolate; }
+.vo-scroll-stage { animation: voPageIn 700ms cubic-bezier(.2,.8,.2,1) both; }
+.vo-scroll-stage > * { animation: voReveal 800ms cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--vo-i, 0) * 70ms); }
+.vo-scroll-stage .panel,
+.vo-scroll-stage .garvex-live-panel,
+.vo-scroll-stage .garvex-chat { transition: transform 500ms cubic-bezier(.2,.8,.2,1), border-color 300ms ease, box-shadow 500ms ease; }
+.vo-scroll-stage .panel:hover,
+.vo-scroll-stage .garvex-live-panel:hover { transform: translateY(-2px); border-color: rgba(255,255,255,.16); box-shadow: 0 18px 60px rgba(0,0,0,.22); }
+.garvex-messages { scroll-behavior: smooth; overscroll-behavior-y: contain; scroll-snap-type: y proximity; }
+.garvex-messages > * { scroll-snap-align: start; }
+.garvex-welcome { position: relative; overflow: hidden; }
+.garvex-welcome::before { content:""; position:absolute; width:min(60vw,720px); height:min(60vw,720px); border-radius:50%; background:radial-gradient(circle, rgba(77,125,255,.13), rgba(77,125,255,0) 68%); filter:blur(10px); pointer-events:none; animation:voAmbient 7s ease-in-out infinite alternate; }
+.garvex-welcome > * { position:relative; z-index:1; }
+.garvex-orb-xl { width:150px; height:150px; animation:voFloat 5s ease-in-out infinite; transform:translateZ(0); }
+.garvex-orb-live { will-change:transform; }
+@keyframes voPageIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }
+@keyframes voReveal { from { opacity:0; transform:translateY(18px) scale(.985); } to { opacity:1; transform:none; } }
+@keyframes voFloat { 0%,100% { transform:translate3d(0,0,0) rotate(-1deg); } 50% { transform:translate3d(0,-9px,0) rotate(1deg); } }
+@keyframes voAmbient { from { transform:translate3d(-4%, -2%, 0) scale(.92); opacity:.65; } to { transform:translate3d(4%, 3%, 0) scale(1.08); opacity:1; } }
+@media (prefers-reduced-motion: reduce) {
+  .vo-scroll-stage, .vo-scroll-stage > *, .garvex-orb-xl, .garvex-welcome::before { animation:none !important; }
+  .garvex-messages { scroll-behavior:auto; scroll-snap-type:none; }
+}
