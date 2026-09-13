@@ -2,7 +2,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { aiConfigs, aiMessages } from "@/db/schema";
 import { decryptSecret } from "@/lib/crypto";
-import { getPlatformSecret, getPlatformSecretValues, listPlatformSecretMetadata } from "@/lib/platform-secrets";
+import { getPlatformSecretValues, listPlatformSecretMetadata } from "@/lib/platform-secrets";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 export type CompletionResult = { text: string; tokensIn: number; tokensOut: number; costCents: number; provider: string; model: string };
@@ -35,68 +35,8 @@ const COUNCIL: { provider: string; key: string; model: string }[] = [
 type Candidate = { provider: string; model: string; apiKey: string; credentialId: string; source: "platform" | "environment" };
 function shuffle<T>(items: T[]): T[] { const copy = [...items]; for (let i = copy.length - 1; i > 0; i -= 1) { const j = Math.floor(Math.random() * (i + 1)); [copy[i], copy[j]] = [copy[j], copy[i]]; } return copy; }
 function envForKey(key: string) { return process.env[key] ?? null; }
-
-async function configuredCouncil(): Promise<Candidate[]> {
-  const groups = await Promise.all(COUNCIL.map(async (candidate) => {
-    const keys = await getPlatformSecretValues(candidate.key);
-    const platform = keys.map((entry) => ({ provider: candidate.provider, model: candidate.model, apiKey: entry.value, credentialId: entry.id, source: "platform" as const }));
-    const env = envForKey(candidate.key);
-    if (env) platform.push({ provider: candidate.provider, model: candidate.model, apiKey: env, credentialId: `env:${candidate.key}`, source: "environment" });
-    return platform;
-  }));
-  return shuffle(groups.flat());
-}
-
-export async function getGarvexProviderStatus() {
-  const metadata = await listPlatformSecretMetadata();
-  return Promise.all(COUNCIL.map(async (item) => {
-    const stored = metadata.filter((entry) => entry.key === item.key).length;
-    let readable = 0;
-    try { readable = (await getPlatformSecretValues(item.key)).length; } catch { readable = 0; }
-    const env = Boolean(envForKey(item.key));
-    return { provider: item.provider, model: item.model, configured: readable > 0 || env, stored, readable, environment: env, state: readable > 0 || env ? "ready" : stored > 0 ? "stored-unreadable" : "missing" };
-  }));
-}
-
+async function configuredCouncil(): Promise<Candidate[]> { const groups = await Promise.all(COUNCIL.map(async (candidate) => { const keys = await getPlatformSecretValues(candidate.key); const platform = keys.map((entry) => ({ provider: candidate.provider, model: candidate.model, apiKey: entry.value, credentialId: entry.id, source: "platform" as const })); const env = envForKey(candidate.key); if (env) platform.push({ provider: candidate.provider, model: candidate.model, apiKey: env, credentialId: `env:${candidate.key}`, source: "environment" }); return platform; })); return shuffle(groups.flat()); }
+export async function getGarvexProviderStatus() { const metadata = await listPlatformSecretMetadata(); return Promise.all(COUNCIL.map(async (item) => { const stored = metadata.filter((entry) => entry.key === item.key).length; let readable = 0; try { readable = (await getPlatformSecretValues(item.key)).length; } catch { readable = 0; } const environment = Boolean(envForKey(item.key)); const configured = readable > 0 || environment; const state: "ready" | "stored-unreadable" | "missing" = configured ? "ready" : stored > 0 ? "stored-unreadable" : "missing"; return { provider: item.provider, model: item.model, configured, stored, readable, environment, state }; })); }
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) { return new Promise<T>((resolve, reject) => { const timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs); promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); }); }); }
-
-async function completeSingle(messages: ChatMessage[], candidates: Candidate[], timeoutMs: number) {
-  let lastError: Error | null = null;
-  for (const candidate of candidates) {
-    try { return await withTimeout(providerFor(candidate.provider).complete(messages, { model: candidate.model, apiKey: candidate.apiKey, temperature: 0.1, maxTokens: 4096 }), timeoutMs, candidate.provider); }
-    catch (error) { lastError = error instanceof Error ? error : new Error(String(error)); }
-  }
-  throw lastError ?? new Error("No working Garvex credential is available.");
-}
-
-export async function multiAgentComplete(messages: ChatMessage[], opts?: { maxWorkers?: number; timeoutMs?: number; quorum?: number; strategy?: "single" | "complex" }) {
-  const candidates = await configuredCouncil();
-  if (!candidates.length) {
-    const statuses = await getGarvexProviderStatus();
-    const unreadable = statuses.filter((item) => item.stored > 0 && item.readable === 0).map((item) => item.provider);
-    throw new Error(unreadable.length ? `Garvex found ${unreadable.length} stored provider credential(s), but they cannot be decrypted in this deployment (${unreadable.join(", ")}). Re-save those keys in Platform Settings, and keep PLATFORM_ENCRYPTION_KEY stable across deployments.` : "No Garvex provider keys are configured. Add provider API keys in Platform Settings or Vercel environment variables.");
-  }
-  const timeoutMs = opts?.timeoutMs ?? 4500;
-  const strategy = opts?.strategy ?? "single";
-  if (strategy === "single") {
-    const result = await completeSingle(messages, candidates, timeoutMs);
-    return { ...result, workers: [{ provider: result.provider, model: result.model, tokensIn: result.tokensIn, tokensOut: result.tokensOut }], failedWorkers: 0, strategy: "single" as const };
-  }
-  const maxWorkers = Math.min(opts?.maxWorkers ?? candidates.length, candidates.length);
-  const workers = candidates.slice(0, maxWorkers);
-  const pending = workers.map((worker, index) => withTimeout(providerFor(worker.provider).complete(messages, { model: worker.model, apiKey: worker.apiKey, temperature: 0.1, maxTokens: 4096 }), timeoutMs, worker.provider).then((result) => ({ index, result })).catch((error) => ({ index, error: error instanceof Error ? error : new Error(String(error)) })));
-  const outcomes = await Promise.all(pending);
-  const successfulWithCandidates = outcomes.filter((item): item is { index: number; result: CompletionResult } => "result" in item && Boolean(item.result.text?.trim())).map((item) => ({ candidate: workers[item.index], result: item.result }));
-  const successful = successfulWithCandidates.map((item) => item.result);
-  if (!successful.length) throw new Error("All configured Garvex providers failed or timed out.");
-  const evidence = successful.slice(0, 7).map((result, index) => `===== AGENT ${index + 1} | ${result.provider} | ${result.model} =====\n${result.text.slice(0, 16000)}`).join("\n\n");
-  const judgeCandidate = successfulWithCandidates[0].candidate;
-  const judgePrompt: ChatMessage[] = [{ role: "system", content: "You are Garvex's synthesis judge. Reconcile independent agent outputs. Prefer evidence-supported conclusions, flag uncertainty, preserve concrete technical details, and never invent actions or facts. Return only the final answer." }, ...messages.filter((m) => m.role !== "assistant"), { role: "user", content: `Independent agent outputs:\n${evidence}\n\nSynthesize the strongest correct result.` }];
-  try {
-    const final = await withTimeout(providerFor(judgeCandidate.provider).complete(judgePrompt, { model: judgeCandidate.model, apiKey: judgeCandidate.apiKey, temperature: 0.05, maxTokens: 8192 }), Math.max(3000, Math.min(timeoutMs, 3500)), "judge");
-    return { ...final, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: workers.length - successful.length, strategy: "complex" as const };
-  } catch {
-    const fallback = successful[0];
-    return { ...fallback, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: workers.length - successful.length, strategy: "complex" as const };
-  }
-}
+async function completeSingle(messages: ChatMessage[], candidates: Candidate[], timeoutMs: number) { let lastError: Error | null = null; for (const candidate of candidates) { try { return await withTimeout(providerFor(candidate.provider).complete(messages, { model: candidate.model, apiKey: candidate.apiKey, temperature: 0.1, maxTokens: 4096 }), timeoutMs, candidate.provider); } catch (error) { lastError = error instanceof Error ? error : new Error(String(error)); } } throw lastError ?? new Error("No working Garvex credential is available."); }
+export async function multiAgentComplete(messages: ChatMessage[], opts?: { maxWorkers?: number; timeoutMs?: number; quorum?: number; strategy?: "single" | "complex" }) { const candidates = await configuredCouncil(); if (!candidates.length) { const statuses = await getGarvexProviderStatus(); const unreadable = statuses.filter((item) => item.stored > 0 && item.readable === 0).map((item) => item.provider); throw new Error(unreadable.length ? `Garvex found ${unreadable.length} stored provider credential(s), but they cannot be decrypted in this deployment (${unreadable.join(", ")}). Re-save those keys in Platform Settings, and keep PLATFORM_ENCRYPTION_KEY stable across deployments.` : "No Garvex provider keys are configured. Add provider API keys in Platform Settings or Vercel environment variables."); } const timeoutMs = opts?.timeoutMs ?? 4500; const strategy = opts?.strategy ?? "single"; if (strategy === "single") { const result = await completeSingle(messages, candidates, timeoutMs); return { ...result, workers: [{ provider: result.provider, model: result.model, tokensIn: result.tokensIn, tokensOut: result.tokensOut }], failedWorkers: 0, strategy: "single" as const }; } const maxWorkers = Math.min(opts?.maxWorkers ?? candidates.length, candidates.length); const workers = candidates.slice(0, maxWorkers); const pending = workers.map((worker, index) => withTimeout(providerFor(worker.provider).complete(messages, { model: worker.model, apiKey: worker.apiKey, temperature: 0.1, maxTokens: 4096 }), timeoutMs, worker.provider).then((result) => ({ index, result })).catch((error) => ({ index, error: error instanceof Error ? error : new Error(String(error)) }))); const outcomes = await Promise.all(pending); const successfulWithCandidates = outcomes.filter((item): item is { index: number; result: CompletionResult } => "result" in item && Boolean(item.result.text?.trim())).map((item) => ({ candidate: workers[item.index], result: item.result })); const successful = successfulWithCandidates.map((item) => item.result); if (!successful.length) throw new Error("All configured Garvex providers failed or timed out."); const evidence = successful.slice(0, 7).map((result, index) => `===== AGENT ${index + 1} | ${result.provider} | ${result.model} =====\n${result.text.slice(0, 16000)}`).join("\n\n"); const judgeCandidate = successfulWithCandidates[0].candidate; const judgePrompt: ChatMessage[] = [{ role: "system", content: "You are Garvex's synthesis judge. Reconcile independent agent outputs. Prefer evidence-supported conclusions, flag uncertainty, preserve concrete technical details, and never invent actions or facts. Return only the final answer." }, ...messages.filter((m) => m.role !== "assistant"), { role: "user", content: `Independent agent outputs:\n${evidence}\n\nSynthesize the strongest correct result.` }]; try { const final = await withTimeout(providerFor(judgeCandidate.provider).complete(judgePrompt, { model: judgeCandidate.model, apiKey: judgeCandidate.apiKey, temperature: 0.05, maxTokens: 8192 }), Math.max(3000, Math.min(timeoutMs, 3500)), "judge"); return { ...final, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: workers.length - successful.length, strategy: "complex" as const }; } catch { const fallback = successful[0]; return { ...fallback, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: workers.length - successful.length, strategy: "complex" as const }; } }
