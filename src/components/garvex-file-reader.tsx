@@ -1,7 +1,44 @@
 "use client";
 import { useRef, useState } from "react";
+
 export function GarvexFileReader({ csrf }: { csrf: string }) {
-  const inputRef = useRef<HTMLInputElement>(null); const [open,setOpen]=useState(false); const [busy,setBusy]=useState(false); const [result,setResult]=useState<string|null>(null); const [name,setName]=useState(""); const [error,setError]=useState<string|null>(null);
-  const readFile=async(file:File)=>{setBusy(true);setError(null);setResult(null);setName(file.name);try{const form=new FormData();form.append("file",file);form.append("model","nvidia/nemotron-3-nano-omni-30b-a3b-reasoning");form.append("prompt","Read and analyze this file. Extract important visual or spoken information, OCR where applicable, and explain the result clearly.");const response=await fetch("/api/v1/admin/garvex/nvidia",{method:"POST",headers:{"x-csrf-token":csrf},body:form});const text=await response.text();let data:{data?:{answer?:string};error?:{message?:string}}={};try{data=text?JSON.parse(text):{}}catch{throw new Error(`Invalid server response (${response.status})`)}if(!response.ok)throw new Error(data.error?.message??`NVIDIA request failed (${response.status})`);setResult(data.data?.answer??"No analysis returned.")}catch(e){setError(e instanceof Error?e.message:String(e))}finally{setBusy(false)}};
-  return <><button type="button" className="garvex-file-read-button" onClick={()=>inputRef.current?.click()} disabled={busy}>{busy?"◌ Reading…":"⌕ Read with NVIDIA"}</button><input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime,audio/wav,audio/mpeg,audio/mp3,audio/webm" hidden onChange={e=>{const file=e.target.files?.[0];if(file){setOpen(true);void readFile(file)}e.currentTarget.value=""}}/>{open?<div className="garvex-file-reader-modal" role="dialog" aria-modal="true"><div className="garvex-file-reader-backdrop" onClick={()=>setOpen(false)}/><section className="garvex-file-reader-card"><header><div><b>Garvex · NVIDIA reader</b><span>{name}</span></div><button type="button" onClick={()=>setOpen(false)} aria-label="Close">×</button></header>{busy?<div className="garvex-file-reader-loading"><span/><span/><span/></div>:null}{error?<div className="garvex-error">{error}</div>:null}{result?<div className="garvex-file-reader-result" dir="auto">{result}</div>:null}</section></div>:null}</>;
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const readFile = async (file: File) => {
+    setBusy(true); setError(null); setResult(null); setName(file.name); setOpen(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("model", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning");
+      form.append("prompt", "First transcribe ALL visible text exactly as it appears, preserving language, spelling, punctuation, numbers, line breaks and layout order as closely as possible. Do not summarize or paraphrase. After the exact transcription, only perform explanation, translation, or other transformation if the user's instruction explicitly asks for it.");
+      const response = await fetch("/api/v1/admin/garvex/nvidia", { method: "POST", headers: { "x-csrf-token": csrf }, body: form });
+      const text = await response.text();
+      let data: { data?: { answer?: string }; error?: { message?: string } } = {};
+      try { data = text ? JSON.parse(text) : {}; } catch { throw new Error(`Invalid server response (${response.status})`); }
+      if (!response.ok) throw new Error(data.error?.message ?? `NVIDIA request failed (${response.status})`);
+      setResult(data.data?.answer ?? "No text was returned.");
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
+  return <>
+    <button type="button" className="garvex-file-read-button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="Attach image or media for Garvex" title="Read image or media with Garvex">
+      {busy ? "◌" : "⌕"}
+    </button>
+    <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime,audio/wav,audio/mpeg,audio/mp3,audio/webm" hidden onChange={e => { const file = e.target.files?.[0]; if (file) void readFile(file); e.currentTarget.value = ""; }} />
+    {open ? <div className="garvex-file-reader-modal" role="dialog" aria-modal="true">
+      <div className="garvex-file-reader-backdrop" onClick={() => setOpen(false)} />
+      <section className="garvex-file-reader-card">
+        <header><div><b>Garvex · Image reader</b><span>{name}</span></div><button type="button" onClick={() => setOpen(false)} aria-label="Close">×</button></header>
+        {busy ? <div className="garvex-file-reader-loading"><span/><span/><span/></div> : null}
+        {error ? <div className="garvex-error">{error}</div> : null}
+        {result ? <div className="garvex-file-reader-result" dir="auto">{result}</div> : null}
+      </section>
+    </div> : null}
+  </>;
 }
