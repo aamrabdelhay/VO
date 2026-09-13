@@ -1,0 +1,47 @@
+name: Garvex Evolution
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: garvex-evolution
+  cancel-in-progress: false
+
+jobs:
+  evolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Start local model runtime
+        run: |
+          ollama serve > /tmp/ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:11434/api/tags >/dev/null && break; sleep 2; done
+          ollama pull qwen2.5:3b
+
+      - name: Run Garvex evolution cycle
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GARVEX_LOCAL_MODEL_URL: http://127.0.0.1:11434
+          GARVEX_LOCAL_MODEL: qwen2.5:3b
+          GARVEX_WORKER_ID: github-actions-${{ github.run_id }}
+        run: node scripts/garvex-evolution-worker.mjs

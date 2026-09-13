@@ -17,6 +17,7 @@ const MAX_FILES = 8;
 type PatchFile = { path: string; content: string };
 type EditorBody = { mode: "prepare" | "apply"; prompt?: string; baseSha?: string; files?: PatchFile[]; summary?: string };
 function parseJson<T>(text: string): T | null { const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i); const source = fenced?.[1] ?? text; const start = source.indexOf("{"); const end = source.lastIndexOf("}"); if (start < 0 || end <= start) return null; try { return JSON.parse(source.slice(start, end + 1)) as T; } catch { return null; } }
+function messageText(content: ChatMessage["content"]): string { return typeof content === "string" ? content : content.filter((part) => part.type === "text").map((part) => part.text).join("\n"); }
 async function walk(dir: string, root: string, out: string[] = []) { if (out.length >= 500) return out; for (const entry of await fs.readdir(dir, { withFileTypes: true })) { if (entry.name === "node_modules" || entry.name === ".git" || entry.name === ".next") continue; const full = path.join(dir, entry.name); const rel = path.relative(root, full).replaceAll(path.sep, "/"); if (entry.isDirectory()) await walk(full, root, out); else out.push(rel); if (out.length >= 500) break; } return out; }
 async function resolveBaseSha(project: typeof projects.$inferSelect, token: string | null) { if (project.desiredCommitSha) return project.desiredCommitSha; if (project.lastSuccessfulCommitSha) return project.lastSuccessfulCommitSha; return (await getBranchCommit(project.repoFullName, project.productionBranch, token)).sha; }
 async function resolveEditorConfig(orgId: string) { const configured = await resolveAIConfig(orgId); if (configured) return configured; const key = await getPlatformSecret("NVIDIA_API_KEY"); if (!key) return null; return { provider: "nvidia", model: "deepseek-ai/deepseek-v4-flash-0731", apiKey: key, baseUrl: "https://integrate.api.nvidia.com/v1", temperature: 0.1, maxTokens: 8192, dailyBudgetCents: 500 }; }
@@ -26,7 +27,7 @@ async function complete(orgId: string, conversationId: string, messages: ChatMes
   const spent = await spentTodayCents(orgId);
   if (config.dailyBudgetCents > 0 && spent >= config.dailyBudgetCents) throw new AIStopped("Daily AI budget exhausted");
   const result = await multiAgentComplete(messages, { strategy: "complex", timeoutMs: 4500, maxWorkers: 12, quorum: 3 });
-  for (const message of messages.filter((m) => m.role !== "system")) await db.insert(aiMessages).values({ conversationId, role: message.role, content: message.content.slice(0, 20000) });
+  for (const message of messages.filter((m) => m.role !== "system")) await db.insert(aiMessages).values({ conversationId, role: message.role, content: messageText(message.content).slice(0, 20000) });
   await db.insert(aiMessages).values({ conversationId, role: "assistant", content: result.text.slice(0, 20000), tokensIn: result.tokensIn, tokensOut: result.tokensOut, costCents: result.costCents });
   return result;
 }
