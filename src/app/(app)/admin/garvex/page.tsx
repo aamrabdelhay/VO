@@ -6,7 +6,7 @@ import { getGarvexProviderStatus } from "@/lib/ai/provider";
 import { freeDomainForProject } from "@/lib/vercel-hosting";
 import { GarvexMaxConsoleV3 } from "@/components/garvex-max-console-v3";
 import { GarvexFileReader } from "@/components/garvex-file-reader";
-import "../../../../garvex-file-reader.css";
+import "../../../garvex-file-reader.css";
 
 export const dynamic = "force-dynamic";
 
