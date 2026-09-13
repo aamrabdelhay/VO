@@ -32,8 +32,10 @@ export function GarvexCapabilityPanel({ capabilities }: { capabilities: Capabili
   useEffect(() => {
     const handle = (event: Event) => {
       const detail = (event as CustomEvent<{ capability?: string; state?: RuntimeState }>).detail;
-      if (!detail?.capability || !detail.state) return;
-      setRuntime((current) => ({ ...current, [detail.capability]: detail.state! }));
+      const capability = detail?.capability;
+      const state = detail?.state;
+      if (!capability || !state) return;
+      setRuntime((current) => ({ ...current, [capability]: state }));
     };
     window.addEventListener("garvex:capability", handle);
     return () => window.removeEventListener("garvex:capability", handle);
