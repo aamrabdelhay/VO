@@ -81,6 +81,34 @@ repository, add the webhook shown in project settings, then deploy.
 4. Set `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY`; installation tokens are
    minted on demand and cached until shortly before expiry.
 
+## Vercel deployment integration — known limitation
+
+The repository's Vercel project is connected to GitHub repository
+`aamrabdelhay/VO`, and the observed Vercel deployment metadata shows the
+production Git ref as `main`. The repository also contains a GitHub Actions
+verification workflow that runs on pushes and pull requests targeting `main`.
+
+The current ChatGPT Vercel connector exposes deployment inspection and a
+`deploy_to_vercel` action, but the action currently has a schema mismatch in
+this environment: its visible callable schema accepts no parameters while the
+underlying deployment path rejects the call as missing `target`, `name`, and
+`files`. There is no generic authenticated HTTP POST/webhook tool available in
+this environment that can be used as a substitute for the Vercel REST
+`/v13/deployments` endpoint.
+
+**Known limitation:** do not retry the same connector call or claim that a
+Vercel deployment was created when this mismatch occurs. Verify the deployment
+from the Vercel Dashboard instead. A successful GitHub push/commit is not proof
+that the Vercel build succeeded.
+
+For incident records, capture:
+
+* Git commit SHA and branch.
+* Vercel deployment ID, target, state and build logs.
+* Whether the deployment was created by Git integration or manual/API deploy.
+* If the connector is blocked by the schema mismatch, record it as a tooling
+  limitation rather than treating it as an application failure.
+
 ## Security model
 
 * Secrets use envelope encryption (random DEK per secret, wrapped with the KEK).
@@ -133,5 +161,6 @@ repository, add the webhook shown in project settings, then deploy.
 | --- | --- | --- | --- |
 | Control-plane process loss | 0 | minutes | Restart app; running apps unaffected |
 | Database loss | last backup | < 1h | Restore dump, restart, reconcile |
+| Object storage loss | last backup | < 1h | Restore dump, restart, reconcile |
 | Object storage loss | last backup | < 1h | Restore bundles, or redeploy from GitHub commits |
 | Host loss | last backup | hours | Re-provision host, restore, redeploy desired commits |
