@@ -10,10 +10,12 @@ import { GarvexFileReader } from "@/components/garvex-file-reader";
 import { GarvexCapabilityPanel } from "@/components/garvex-capability-panel";
 import { GarvexOrb } from "@/components/garvex-orb";
 import { GarvexDefaultAI } from "@/components/garvex-default-ai";
+import { GarvexLiveVoice } from "@/components/garvex-live-voice";
 import "@/app/garvex-file-reader.css";
 import "@/app/garvex-capability-panel.css";
 import "@/app/garvex-v4.css";
 import "@/app/garvex-overrides.css";
+import "@/app/garvex-live-voice.css";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +35,7 @@ export default async function GarvexPage() {
       <span className="garvex-v4-orb-label">GARVEX CORE</span>
     </div>
     <GarvexChatV4 csrf={user.csrfToken} providers={typedProviders} projects={projectList} isPlatformAdmin={user.isPlatformAdmin} />
+    <GarvexLiveVoice csrf={user.csrfToken} />
     <GarvexCapabilityPanel capabilities={capabilities} />
     <GarvexFileReader csrf={user.csrfToken} />
   </>;
