@@ -1,0 +1,27 @@
+/* Garvex interaction/layout fixes */
+.vo-scroll-stage{display:flex;flex-direction:column;gap:12px;min-width:0;overflow:auto!important}
+.garvex-v4-shell{order:1;width:100%;min-width:0}
+.garvex-capability-panel{order:3;width:100%;margin-top:0}
+.garvex-v4-orb-wrap{order:0;min-height:150px;margin:0 auto 2px}
+.garvex-v4-orb-wrap canvas{width:min(180px,38vw)!important;height:min(180px,38vw)!important}
+/* Never open the workspace drawer automatically from chat/voice/media actions. */
+.garvex-v4-drawer.workspace,.garvex-v4-drawer.workspace.open{display:none!important}
+/* Keep the conversation as the visual focus. */
+.garvex-v4-welcome{min-height:30vh}
+.garvex-v4-main{padding-top:20px}
+/* Safe progressive reveal: response text appears gradually instead of popping in as one block. */
+.garvex-v4-message.assistant .garvex-v4-content{animation:garvexV4AnswerReveal 1800ms steps(36,end) both;overflow:hidden;clip-path:inset(0 0 100% 0)}
+@keyframes garvexV4AnswerReveal{0%{clip-path:inset(0 0 100% 0);opacity:.35}100%{clip-path:inset(0 0 0 0);opacity:1}}
+/* Reader attachment button: visually integrated with the composer, not a floating banner. */
+.garvex-file-read-button{position:fixed;z-index:50;right:calc(max(8px, 5vw) + 76px);bottom:86px;width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.1);border-radius:9px;background:#151517;color:#bbb;font-size:0;box-shadow:none;cursor:pointer}
+.garvex-file-read-button::before{content:"⌕";font-size:15px}
+.garvex-file-read-button:disabled{opacity:.5;cursor:wait}
+.garvex-file-reader-card{max-width:min(760px,92vw)}
+.garvex-file-reader-result{white-space:pre-wrap;overflow-wrap:anywhere}
+@media (max-width:560px){
+ .vo-scroll-stage{gap:8px}
+ .garvex-v4-orb-wrap{min-height:128px}
+ .garvex-v4-welcome{min-height:24vh}
+ .garvex-v4-main{padding:12px 9px 174px}
+ .garvex-file-read-button{right:50px;bottom:82px;width:30px;height:30px}
+}
