@@ -9,6 +9,7 @@ import { GarvexChatV4 } from "@/components/garvex-chat-v4";
 import { GarvexFileReader } from "@/components/garvex-file-reader";
 import { GarvexCapabilityPanel } from "@/components/garvex-capability-panel";
 import { GarvexOrb } from "@/components/garvex-orb";
+import { GarvexDefaultAI } from "@/components/garvex-default-ai";
 import "@/app/garvex-file-reader.css";
 import "@/app/garvex-capability-panel.css";
 import "@/app/garvex-v4.css";
@@ -23,9 +24,10 @@ export default async function GarvexPage() {
   const rows = membership
     ? await db.select({ id: projects.id, name: projects.name, repoFullName: projects.repoFullName }).from(projects).where(eq(projects.orgId, membership.org.id)).orderBy(desc(projects.updatedAt)).limit(100)
     : [];
-  const projectList = await Promise.all(rows.map(async (project) => ({ ...project, liveUrl: `https://${await freeDomainForProject({ ...project } as typeof projects.$inferSelect)}` })));
+  const projectList = await Promise.all(rows.map(async (project) => ({ ...project, liveUrl: `https://${await freeDomainForProject(project)}` })));
   const typedProviders = providers.map((provider) => ({ ...provider, state: provider.state as "ready" | "stored-unreadable" | "missing" }));
   return <>
+    <GarvexDefaultAI />
     <div className="garvex-v4-orb-wrap" aria-label="Garvex">
       <GarvexOrb size={180} />
       <span className="garvex-v4-orb-label">GARVEX CORE</span>
