@@ -10,12 +10,9 @@ GitHub → verified/deduplicated webhook → durable queue → build worker
        → atomic Traefik route promotion → monitoring → retention / cleanup
 ```
 
-The system separates:
+## Garvex MAX
 
-- **Control plane:** Next.js dashboard/API, authentication, RBAC, PostgreSQL state, durable jobs, deployment and AI orchestration.
-- **Data plane:** isolated build workspaces, Docker/process runtime drivers, immutable artifacts, Traefik routing and TLS.
-
-Traefik routes internet traffic directly to application runtimes. Existing applications keep serving if the control plane is temporarily unavailable.
+Garvex is the primary AI control center. It supports persistent chat history, Chat / Research / Build & Fix modes, explicit-write-only repository changes, image/video generation, push-to-talk voice, multimodal image/audio/video reading through NVIDIA Omni, and a GPU WebGL orb optimized for smooth animation.
 
 ## Implemented capabilities
 
@@ -65,18 +62,9 @@ npm run dev
 
 Open `http://localhost:3000`. On first start, the owner account is created from `PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD`.
 
-For a full public installation, configure `PLATFORM_PUBLIC_URL`, `PLATFORM_DOMAIN`, wildcard DNS and the Traefik/ACME service in `docker-compose.yml`.
-
 ## GitHub App
 
-Create a GitHub App and configure:
-
-- Repository permissions: Contents, Metadata, Pull requests and Commit statuses
-- Events: `push` and `pull_request`
-- Webhook URL: `https://<platform>/api/v1/webhooks/github`
-- Credentials: `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY`
-
-After creating a project, use the per-project webhook secret displayed in its settings. Installation tokens are minted when required and cached only until shortly before expiration.
+Create a GitHub App and configure repository contents, metadata, pull requests and commit statuses, plus `push` and `pull_request` events.
 
 ## Critical safety guarantees
 
