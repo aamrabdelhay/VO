@@ -18,7 +18,10 @@ try {
   await client.query(`SELECT pg_advisory_xact_lock(hashtextextended('vo.vercel_db_prepare', 0))`);
   await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS free_domain text`);
   await client.query(`UPDATE projects SET free_domain = lower(regexp_replace(trim(slug), '[^a-zA-Z0-9-]', '-', 'g')) WHERE free_domain IS NULL OR free_domain = ''`);
-  await client.query(`ALTER TABLE projects ALTER COLUMN free_domain SET NOT NULL`);
+  // The application stores the canonical platform domain in the `domains`
+  // table. `projects.free_domain` is only a legacy compatibility column and
+  // must remain nullable so project creation does not require duplicating it.
+  await client.query(`ALTER TABLE projects ALTER COLUMN free_domain DROP NOT NULL`);
   await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS projects_free_domain_uq ON projects (free_domain)`);
   await client.query(`
     CREATE TABLE IF NOT EXISTS container_instances (
