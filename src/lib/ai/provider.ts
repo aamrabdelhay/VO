@@ -3,28 +3,124 @@ import { db } from "@/db";
 import { aiConfigs, aiMessages } from "@/db/schema";
 import { decryptSecret } from "@/lib/crypto";
 import { getPlatformSecretValues, listPlatformSecretMetadata } from "@/lib/platform-secrets";
+import { NVIDIA_MODELS } from "@/lib/ai/nvidia-catalog";
 
-export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
-export type CompletionResult = { text: string; tokensIn: number; tokensOut: number; costCents: number; provider: string; model: string };
+export type ChatPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } }
+  | { type: "video_url"; video_url: { url: string } }
+  | { type: "audio_url"; audio_url: { url: string } };
+export type ChatContent = string | ChatPart[];
+export type ChatMessage = { role: "system" | "user" | "assistant"; content: ChatContent };
+export type CompletionResult = {
+  text: string;
+  tokensIn: number;
+  tokensOut: number;
+  costCents: number;
+  provider: string;
+  model: string;
+};
 export interface AIProvider { readonly name: string; complete(messages: ChatMessage[], opts: ProviderOptions): Promise<CompletionResult>; }
 export type ProviderOptions = { model: string; apiKey: string; baseUrl?: string | null; temperature: number; maxTokens: number };
+
 const PRICING: Record<string, { in: number; out: number }> = { default: { in: 0.03, out: 0.15 } };
 function estimateCost(tokensIn: number, tokensOut: number) { const p = PRICING.default; return (tokensIn / 1000) * p.in + (tokensOut / 1000) * p.out; }
+function textContent(content: ChatContent) { return typeof content === "string" ? content : content.filter((part) => part.type === "text").map((part) => part.text).join("\n"); }
+function nvidiaContent(messages: ChatMessage[]) { return messages; }
 
-class AnthropicProvider implements AIProvider { readonly name = "anthropic"; async complete(messages: ChatMessage[], opts: ProviderOptions) { const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n"); const rest = messages.filter((m) => m.role !== "system"); const res = await fetch(`${opts.baseUrl ?? "https://api.anthropic.com"}/v1/messages`, { method: "POST", headers: { "content-type": "application/json", "x-api-key": opts.apiKey, "anthropic-version": "2023-06-01" }, body: JSON.stringify({ model: opts.model, max_tokens: opts.maxTokens, temperature: opts.temperature, system, messages: rest.map((m) => ({ role: m.role, content: m.content })) }) }); if (!res.ok) throw new Error(`Anthropic request failed (${res.status}): ${await res.text()}`); const data = (await res.json()) as { content: { type: string; text?: string }[]; usage?: { input_tokens: number; output_tokens: number } }; const text = data.content.map((c) => c.text ?? "").join(""); const tokensIn = data.usage?.input_tokens ?? 0; const tokensOut = data.usage?.output_tokens ?? 0; return { text, tokensIn, tokensOut, costCents: estimateCost(tokensIn, tokensOut), provider: this.name, model: opts.model }; } }
-class OpenAICompatibleProvider implements AIProvider { constructor(readonly name: string, private readonly defaultBase: string) {} async complete(messages: ChatMessage[], opts: ProviderOptions) { const res = await fetch(`${(opts.baseUrl ?? this.defaultBase).replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` }, body: JSON.stringify({ model: opts.model, temperature: opts.temperature, max_tokens: opts.maxTokens, messages }) }); if (!res.ok) throw new Error(`${this.name} request failed (${res.status}): ${await res.text()}`); const data = (await res.json()) as { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } }; const tokensIn = data.usage?.prompt_tokens ?? 0; const tokensOut = data.usage?.completion_tokens ?? 0; return { text: data.choices?.[0]?.message?.content ?? "", tokensIn, tokensOut, costCents: estimateCost(tokensIn, tokensOut), provider: this.name, model: opts.model }; } }
-class GeminiProvider implements AIProvider { readonly name = "gemini"; async complete(messages: ChatMessage[], opts: ProviderOptions) { const base = opts.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta"; const res = await fetch(`${base}/models/${opts.model}:generateContent?key=${opts.apiKey}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ contents: messages.filter((m) => m.role !== "system").map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })), systemInstruction: { parts: [{ text: messages.filter((m) => m.role === "system").map((m) => m.content).join("\n") }] }, generationConfig: { temperature: opts.temperature, maxOutputTokens: opts.maxTokens } }) }); if (!res.ok) throw new Error(`Gemini request failed (${res.status}): ${await res.text()}`); const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[]; usageMetadata?: { promptTokenCount: number; candidatesTokenCount: number } }; const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? ""; const tokensIn = data.usageMetadata?.promptTokenCount ?? 0; const tokensOut = data.usageMetadata?.candidatesTokenCount ?? 0; return { text, tokensIn, tokensOut, costCents: estimateCost(tokensIn, tokensOut), provider: this.name, model: opts.model }; } }
-class CohereProvider implements AIProvider { readonly name = "cohere"; async complete(messages: ChatMessage[], opts: ProviderOptions) { const res = await fetch(`${opts.baseUrl ?? "https://api.cohere.com/v2"}/chat`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` }, body: JSON.stringify({ model: opts.model, messages, temperature: opts.temperature, max_tokens: opts.maxTokens }) }); if (!res.ok) throw new Error(`Cohere request failed (${res.status}): ${await res.text()}`); const data = (await res.json()) as { message?: { content?: { type: string; text?: string }[] }; usage?: { tokens?: { input_tokens?: number; output_tokens?: number } } }; const text = data.message?.content?.map((part) => part.text ?? "").join("") ?? ""; const tokensIn = data.usage?.tokens?.input_tokens ?? 0; const tokensOut = data.usage?.tokens?.output_tokens ?? 0; return { text, tokensIn, tokensOut, costCents: estimateCost(tokensIn, tokensOut), provider: this.name, model: opts.model }; } }
-export function providerFor(name: string): AIProvider { switch (name) { case "anthropic": return new AnthropicProvider(); case "gemini": return new GeminiProvider(); case "cohere": return new CohereProvider(); case "openai": return new OpenAICompatibleProvider("openai", "https://api.openai.com/v1"); case "nvidia": return new OpenAICompatibleProvider("nvidia", "https://integrate.api.nvidia.com/v1"); case "openrouter": return new OpenAICompatibleProvider("openrouter", "https://openrouter.ai/api/v1"); case "mistral": return new OpenAICompatibleProvider("mistral", "https://api.mistral.ai/v1"); case "cerebras": return new OpenAICompatibleProvider("cerebras", "https://api.cerebras.ai/v1"); case "groq": return new OpenAICompatibleProvider("groq", "https://api.groq.com/openai/v1"); case "kilo": return new OpenAICompatibleProvider("kilo", "https://api.kilo.ai/api/gateway"); default: return new OpenAICompatibleProvider(name, "https://api.openai.com/v1"); } }
+class AnthropicProvider implements AIProvider {
+  readonly name = "anthropic";
+  async complete(messages: ChatMessage[], opts: ProviderOptions) {
+    const system = messages.filter((m) => m.role === "system").map((m) => textContent(m.content)).join("\n\n");
+    const rest = messages.filter((m) => m.role !== "system");
+    const res = await fetch(`${opts.baseUrl ?? "https://api.anthropic.com"}/v1/messages`, { method: "POST", headers: { "content-type": "application/json", "x-api-key": opts.apiKey, "anthropic-version": "2023-06-01" }, body: JSON.stringify({ model: opts.model, max_tokens: opts.maxTokens, temperature: opts.temperature, system, messages: rest.map((m) => ({ role: m.role, content: textContent(m.content) })) }) });
+    if (!res.ok) throw new Error(`Anthropic request failed (${res.status}): ${await res.text()}`);
+    const data = (await res.json()) as { content: { type: string; text?: string }[]; usage?: { input_tokens: number; output_tokens: number } };
+    const text = data.content.map((c) => c.text ?? "").join("");
+    const tokensIn = data.usage?.input_tokens ?? 0; const tokensOut = data.usage?.output_tokens ?? 0;
+    return { text, tokensIn, tokensOut, costCents: estimateCost(tokensIn, tokensOut), provider: this.name, model: opts.model };
+  }
+}
+
+class OpenAICompatibleProvider implements AIProvider {
+  constructor(readonly name: string, private readonly defaultBase: string) {}
+  async complete(messages: ChatMessage[], opts: ProviderOptions) {
+    const payloadMessages = this.name === "nvidia" ? nvidiaContent(messages) : messages.map((m) => ({ ...m, content: textContent(m.content) }));
+    const res = await fetch(`${(opts.baseUrl ?? this.defaultBase).replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` }, body: JSON.stringify({ model: opts.model, temperature: opts.temperature, max_tokens: opts.maxTokens, messages: payloadMessages }) });
+    if (!res.ok) throw new Error(`${this.name} request failed (${res.status}): ${await res.text()}`);
+    const data = (await res.json()) as { choices?: { message?: { content?: string | null } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+    const tokensIn = data.usage?.prompt_tokens ?? 0; const tokensOut = data.usage?.completion_tokens ?? 0;
+    return { text: data.choices?.[0]?.message?.content ?? "", tokensIn, tokensOut, costCents: estimateCost(tokensIn, tokensOut), provider: this.name, model: opts.model };
+  }
+}
+
+class GeminiProvider implements AIProvider {
+  readonly name = "gemini";
+  async complete(messages: ChatMessage[], opts: ProviderOptions) {
+    const base = opts.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta";
+    const res = await fetch(`${base}/models/${opts.model}:generateContent?key=${opts.apiKey}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ contents: messages.filter((m) => m.role !== "system").map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: textContent(m.content) }] })), systemInstruction: { parts: [{ text: messages.filter((m) => m.role === "system").map((m) => textContent(m.content)).join("\n") }] }, generationConfig: { temperature: opts.temperature, maxOutputTokens: opts.maxTokens } }) });
+    if (!res.ok) throw new Error(`Gemini request failed (${res.status}): ${await res.text()}`);
+    const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[]; usageMetadata?: { promptTokenCount: number; candidatesTokenCount: number } };
+    const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+    const tokensIn = data.usageMetadata?.promptTokenCount ?? 0; const tokensOut = data.usageMetadata?.candidatesTokenCount ?? 0;
+    return { text, tokensIn, tokensOut, costCents: estimateCost(tokensIn, tokensOut), provider: this.name, model: opts.model };
+  }
+}
+
+class CohereProvider implements AIProvider {
+  readonly name = "cohere";
+  async complete(messages: ChatMessage[], opts: ProviderOptions) {
+    const res = await fetch(`${opts.baseUrl ?? "https://api.cohere.com/v2"}/chat`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` }, body: JSON.stringify({ model: opts.model, messages: messages.map((m) => ({ role: m.role, content: textContent(m.content) })), temperature: opts.temperature, max_tokens: opts.maxTokens }) });
+    if (!res.ok) throw new Error(`Cohere request failed (${res.status}): ${await res.text()}`);
+    const data = (await res.json()) as { message?: { content?: { type: string; text?: string }[] }; usage?: { tokens?: { input_tokens?: number; output_tokens?: number } } };
+    const text = data.message?.content?.map((part) => part.text ?? "").join("") ?? "";
+    const tokensIn = data.usage?.tokens?.input_tokens ?? 0; const tokensOut = data.usage?.tokens?.output_tokens ?? 0;
+    return { text, tokensIn, tokensOut, costCents: estimateCost(tokensIn, tokensOut), provider: this.name, model: opts.model };
+  }
+}
+
+export function providerFor(name: string): AIProvider {
+  switch (name) {
+    case "anthropic": return new AnthropicProvider();
+    case "gemini": return new GeminiProvider();
+    case "cohere": return new CohereProvider();
+    case "openai": return new OpenAICompatibleProvider("openai", "https://api.openai.com/v1");
+    case "nvidia": return new OpenAICompatibleProvider("nvidia", "https://integrate.api.nvidia.com/v1");
+    case "openrouter": return new OpenAICompatibleProvider("openrouter", "https://openrouter.ai/api/v1");
+    case "mistral": return new OpenAICompatibleProvider("mistral", "https://api.mistral.ai/v1");
+    case "cerebras": return new OpenAICompatibleProvider("cerebras", "https://api.cerebras.ai/v1");
+    case "groq": return new OpenAICompatibleProvider("groq", "https://api.groq.com/openai/v1");
+    case "kilo": return new OpenAICompatibleProvider("kilo", "https://api.kilo.ai/api/gateway");
+    default: return new OpenAICompatibleProvider(name, "https://api.openai.com/v1");
+  }
+}
+
 export type ResolvedAIConfig = ProviderOptions & { provider: string; dailyBudgetCents: number };
-export async function resolveAIConfig(orgId: string): Promise<ResolvedAIConfig | null> { const [config] = await db.select().from(aiConfigs).where(eq(aiConfigs.orgId, orgId)).limit(1); if (config) { let apiKey: string | null = null; if (config.apiKeyCipher) { try { apiKey = decryptSecret(config.apiKeyCipher); } catch { apiKey = null; } } apiKey = apiKey ?? envKeyFor(config.provider); if (!apiKey) return null; return { provider: config.provider, model: config.model, apiKey, baseUrl: config.baseUrl, temperature: config.temperature, maxTokens: config.maxTokens, dailyBudgetCents: config.dailyBudgetCents }; } const provider = process.env.AI_PROVIDER ?? "anthropic"; const apiKey = envKeyFor(provider); if (!apiKey) return null; return { provider, model: process.env.AI_MODEL ?? defaultModel(provider), apiKey, baseUrl: process.env.AI_BASE_URL ?? null, temperature: 0.1, maxTokens: 4096, dailyBudgetCents: 500 }; }
-function envKeyFor(provider: string) { const direct: Record<string, string> = { anthropic: "ANTHROPIC_API_KEY", openai: "OPENAI_API_KEY", gemini: "GEMINI_API_KEY", nvidia: "NVIDIA_API_KEY", openrouter: "OPENROUTER_API_KEY", mistral: "MISTRAL_API_KEY", cerebras: "CEREBRAS_API_KEY", groq: "GROQ_API_KEY", kilo: "KILO_API_KEY", cohere: "COHERE_API_KEY" }; return process.env[direct[provider] ?? "AI_API_KEY"] ?? (provider === "gemini" ? process.env.GOOGLE_API_KEY ?? null : null); }
-function defaultModel(provider: string) { if (provider === "anthropic") return "claude-sonnet-4-5"; if (provider === "openai") return "gpt-4o-mini"; if (provider === "gemini") return "gemini-2.0-flash"; return "gpt-4o-mini"; }
+export async function resolveAIConfig(orgId: string): Promise<ResolvedAIConfig | null> {
+  const [config] = await db.select().from(aiConfigs).where(eq(aiConfigs.orgId, orgId)).limit(1);
+  if (config) {
+    let apiKey: string | null = null;
+    if (config.apiKeyCipher) { try { apiKey = decryptSecret(config.apiKeyCipher); } catch { apiKey = null; } }
+    apiKey = apiKey ?? envKeyFor(config.provider);
+    if (!apiKey) return null;
+    return { provider: config.provider, model: config.model, apiKey, baseUrl: config.baseUrl, temperature: config.temperature, maxTokens: config.maxTokens, dailyBudgetCents: config.dailyBudgetCents };
+  }
+  const provider = process.env.AI_PROVIDER ?? "anthropic"; const apiKey = envKeyFor(provider); if (!apiKey) return null;
+  return { provider, model: process.env.AI_MODEL ?? defaultModel(provider), apiKey, baseUrl: process.env.AI_BASE_URL ?? null, temperature: 0.1, maxTokens: 4096, dailyBudgetCents: 500 };
+}
+function envKeyFor(provider: string) {
+  const direct: Record<string, string> = { anthropic: "ANTHROPIC_API_KEY", openai: "OPENAI_API_KEY", gemini: "GEMINI_API_KEY", nvidia: "NVIDIA_API_KEY", openrouter: "OPENROUTER_API_KEY", mistral: "MISTRAL_API_KEY", cerebras: "CEREBRAS_API_KEY", groq: "GROQ_API_KEY", kilo: "KILO_API_KEY", cohere: "COHERE_API_KEY" };
+  return process.env[direct[provider] ?? "AI_API_KEY"] ?? (provider === "gemini" ? process.env.GOOGLE_API_KEY ?? null : null);
+}
+function defaultModel(provider: string) { if (provider === "anthropic") return "claude-sonnet-4-5"; if (provider === "openai") return "gpt-4o-mini"; if (provider === "gemini") return "gemini-2.0-flash"; return NVIDIA_MODELS.deepseekV4; }
 export async function spentTodayCents(orgId: string): Promise<number> { const rows = await db.execute<{ total: number }>(sql`select coalesce(sum(m.cost_cents), 0) as total from ${aiMessages} m join ai_conversations c on c.id = m.conversation_id join projects p on p.id = c.project_id where p.org_id = ${orgId} and m.created_at > now() - interval '1 day';`); return Number(rows.rows?.[0]?.total ?? 0); }
 
 type Candidate = { provider: string; model: string; apiKey: string; credentialId: string; source: "platform" | "environment" };
 const COUNCIL: { provider: string; key: string; model: string }[] = [
-  { provider: "nvidia", key: "NVIDIA_API_KEY", model: "deepseek-ai/deepseek-v4-flash-0731" },
+  { provider: "nvidia", key: "NVIDIA_API_KEY", model: NVIDIA_MODELS.deepseekV4 },
+  { provider: "nvidia", key: "NVIDIA_API_KEY", model: NVIDIA_MODELS.deepseekV4Pro },
+  { provider: "nvidia", key: "NVIDIA_API_KEY", model: NVIDIA_MODELS.nemotron35Lightning },
+  { provider: "nvidia", key: "NVIDIA_API_KEY", model: NVIDIA_MODELS.omni },
   { provider: "openrouter", key: "OPENROUTER_API_KEY", model: "openrouter/free" },
   { provider: "mistral", key: "MISTRAL_API_KEY", model: "mistral-small-latest" },
   { provider: "cerebras", key: "CEREBRAS_API_KEY", model: "gpt-oss-120b" },
@@ -34,8 +130,77 @@ const COUNCIL: { provider: string; key: string; model: string }[] = [
 ];
 function shuffle<T>(items: T[]): T[] { const copy = [...items]; for (let i = copy.length - 1; i > 0; i -= 1) { const j = Math.floor(Math.random() * (i + 1)); [copy[i], copy[j]] = [copy[j], copy[i]]; } return copy; }
 function envForKey(key: string) { return process.env[key] ?? null; }
-async function configuredCouncil(): Promise<Candidate[]> { const groups = await Promise.all(COUNCIL.map(async (candidate) => { const keys = await getPlatformSecretValues(candidate.key); const platform: Candidate[] = keys.map((entry) => ({ provider: candidate.provider, model: candidate.model, apiKey: entry.value, credentialId: entry.id, source: "platform" as const })); const env = envForKey(candidate.key); if (env) platform.push({ provider: candidate.provider, model: candidate.model, apiKey: env, credentialId: `env:${candidate.key}`, source: "environment" as const }); return platform; })); return shuffle(groups.flat()); }
-export async function getGarvexProviderStatus() { const metadata = await listPlatformSecretMetadata(); return Promise.all(COUNCIL.map(async (item) => { const stored = metadata.filter((entry) => entry.key === item.key).length; let readable = 0; try { readable = (await getPlatformSecretValues(item.key)).length; } catch { readable = 0; } const environment = Boolean(envForKey(item.key)); const configured = readable > 0 || environment; const state: "ready" | "stored-unreadable" | "missing" = configured ? "ready" : stored > 0 ? "stored-unreadable" : "missing"; return { provider: item.provider, model: item.model, configured, stored, readable, environment, state }; })); }
+async function configuredCouncil(): Promise<Candidate[]> {
+  const groups = await Promise.all(COUNCIL.map(async (candidate) => {
+    const keys = await getPlatformSecretValues(candidate.key);
+    const platform: Candidate[] = keys.map((entry) => ({ provider: candidate.provider, model: candidate.model, apiKey: entry.value, credentialId: entry.id, source: "platform" as const }));
+    const env = envForKey(candidate.key); if (env) platform.push({ provider: candidate.provider, model: candidate.model, apiKey: env, credentialId: `env:${candidate.key}`, source: "environment" as const });
+    return platform;
+  }));
+  return shuffle(groups.flat());
+}
+export async function getGarvexProviderStatus() {
+  const metadata = await listPlatformSecretMetadata();
+  return Promise.all(COUNCIL.map(async (item) => {
+    const stored = metadata.filter((entry) => entry.key === item.key).length; let readable = 0;
+    try { readable = (await getPlatformSecretValues(item.key)).length; } catch { readable = 0; }
+    const environment = Boolean(envForKey(item.key)); const configured = readable > 0 || environment;
+    const state: "ready" | "stored-unreadable" | "missing" = configured ? "ready" : stored > 0 ? "stored-unreadable" : "missing";
+    return { provider: item.provider, model: item.model, configured, stored, readable, environment, state };
+  }));
+}
+
+const rateState = new Map<string, number>();
+async function waitForLocalRateSlot(key: string, minIntervalMs = 1000) {
+  const previous = rateState.get(key) ?? 0; const waitMs = Math.max(0, previous + minIntervalMs - Date.now());
+  if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+  rateState.set(key, Date.now());
+}
+function errorStatus(error: unknown) { const match = String(error instanceof Error ? error.message : error).match(/\((4\d\d|5\d\d)\)/); return match ? Number(match[1]) : null; }
+function providerRequestKey(candidate: Candidate) { return `${candidate.provider}:${candidate.model}`; }
+function orderedCandidates(candidates: Candidate[]) {
+  const preferred = [NVIDIA_MODELS.deepseekV4, NVIDIA_MODELS.deepseekV4Pro, NVIDIA_MODELS.nemotron35Lightning, NVIDIA_MODELS.omni];
+  return [...candidates].sort((a, b) => preferred.indexOf(a.model) - preferred.indexOf(b.model));
+}
+async function completeSingle(messages: ChatMessage[], candidates: Candidate[], timeoutMs: number) {
+  let lastError: Error | null = null;
+  for (const candidate of orderedCandidates(candidates)) {
+    try {
+      await waitForLocalRateSlot(providerRequestKey(candidate), candidate.provider === "nvidia" ? 1200 : 500);
+      return await withTimeout(providerFor(candidate.provider).complete(messages, { model: candidate.model, apiKey: candidate.apiKey, temperature: 0.1, maxTokens: 4096 }), timeoutMs, `${candidate.provider}/${candidate.model}`);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      const status = errorStatus(error);
+      if (status === 429) await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+  }
+  throw lastError ?? new Error("No working Garvex credential is available.");
+}
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) { return new Promise<T>((resolve, reject) => { const timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs); promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); }); }); }
-async function completeSingle(messages: ChatMessage[], candidates: Candidate[], timeoutMs: number) { let lastError: Error | null = null; for (const candidate of candidates) { try { return await withTimeout(providerFor(candidate.provider).complete(messages, { model: candidate.model, apiKey: candidate.apiKey, temperature: 0.1, maxTokens: 4096 }), timeoutMs, candidate.provider); } catch (error) { lastError = error instanceof Error ? error : new Error(String(error)); } } throw lastError ?? new Error("No working Garvex credential is available."); }
-export async function multiAgentComplete(messages: ChatMessage[], opts?: { maxWorkers?: number; timeoutMs?: number; quorum?: number; strategy?: "single" | "complex" }) { const candidates = await configuredCouncil(); if (!candidates.length) { const statuses = await getGarvexProviderStatus(); const unreadable = statuses.filter((item) => item.stored > 0 && item.readable === 0).map((item) => item.provider); throw new Error(unreadable.length ? `Garvex found ${unreadable.length} stored provider credential(s), but they cannot be decrypted in this deployment (${unreadable.join(", ")}). Re-save those keys in Platform Settings, and keep PLATFORM_ENCRYPTION_KEY stable across deployments.` : "No Garvex provider keys are configured. Add provider API keys in Platform Settings or Vercel environment variables."); } const timeoutMs = opts?.timeoutMs ?? 4500; const strategy = opts?.strategy ?? "single"; if (strategy === "single") { const result = await completeSingle(messages, candidates, timeoutMs); return { ...result, workers: [{ provider: result.provider, model: result.model, tokensIn: result.tokensIn, tokensOut: result.tokensOut }], failedWorkers: 0, strategy: "single" as const }; } const maxWorkers = Math.min(opts?.maxWorkers ?? candidates.length, candidates.length); const workers = candidates.slice(0, maxWorkers); const pending = workers.map((worker, index) => withTimeout(providerFor(worker.provider).complete(messages, { model: worker.model, apiKey: worker.apiKey, temperature: 0.1, maxTokens: 4096 }), timeoutMs, worker.provider).then((result) => ({ index, result })).catch((error) => ({ index, error: error instanceof Error ? error : new Error(String(error)) }))); const outcomes = await Promise.all(pending); const successfulWithCandidates = outcomes.filter((item): item is { index: number; result: CompletionResult } => "result" in item && Boolean(item.result.text?.trim())).map((item) => ({ candidate: workers[item.index], result: item.result })); const successful = successfulWithCandidates.map((item) => item.result); if (!successful.length) throw new Error("All configured Garvex providers failed or timed out."); const evidence = successful.slice(0, 7).map((result, index) => `===== AGENT ${index + 1} | ${result.provider} | ${result.model} =====\n${result.text.slice(0, 16000)}`).join("\n\n"); const judgeCandidate = successfulWithCandidates[0].candidate; const judgePrompt: ChatMessage[] = [{ role: "system", content: "You are Garvex's synthesis judge. Reconcile independent agent outputs. Prefer evidence-supported conclusions, flag uncertainty, preserve concrete technical details, and never invent actions or facts. Return only the final answer." }, ...messages.filter((m) => m.role !== "assistant"), { role: "user", content: `Independent agent outputs:\n${evidence}\n\nSynthesize the strongest correct result.` }]; try { const final = await withTimeout(providerFor(judgeCandidate.provider).complete(judgePrompt, { model: judgeCandidate.model, apiKey: judgeCandidate.apiKey, temperature: 0.05, maxTokens: 8192 }), Math.max(3000, Math.min(timeoutMs, 3500)), "judge"); return { ...final, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: workers.length - successful.length, strategy: "complex" as const }; } catch { const fallback = successful[0]; return { ...fallback, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: workers.length - successful.length, strategy: "complex" as const }; } }
+export async function multiAgentComplete(messages: ChatMessage[], opts?: { maxWorkers?: number; timeoutMs?: number; quorum?: number; strategy?: "single" | "complex" }) {
+  const candidates = await configuredCouncil();
+  if (!candidates.length) {
+    const statuses = await getGarvexProviderStatus();
+    const unreadable = statuses.filter((item) => item.stored > 0 && item.readable === 0).map((item) => item.provider);
+    throw new Error(unreadable.length ? `Garvex found ${unreadable.length} stored provider credential(s), but they cannot be decrypted in this deployment (${unreadable.join(", ")}). Re-save those keys in Platform Settings, and keep PLATFORM_ENCRYPTION_KEY stable across deployments.` : "No Garvex provider keys are configured. Add provider API keys in Platform Settings or Vercel environment variables.");
+  }
+  const timeoutMs = opts?.timeoutMs ?? 4500; const strategy = opts?.strategy ?? "single";
+  if (strategy === "single") { const result = await completeSingle(messages, candidates, timeoutMs); return { ...result, workers: [{ provider: result.provider, model: result.model, tokensIn: result.tokensIn, tokensOut: result.tokensOut }], failedWorkers: 0, strategy: "single" as const }; }
+  const maxWorkers = Math.min(opts?.maxWorkers ?? Math.min(candidates.length, 6), candidates.length); const workers = orderedCandidates(candidates).slice(0, maxWorkers);
+  const pending = workers.map((worker, index) => waitForLocalRateSlot(providerRequestKey(worker), worker.provider === "nvidia" ? 1200 : 500).then(() => withTimeout(providerFor(worker.provider).complete(messages, { model: worker.model, apiKey: worker.apiKey, temperature: 0.1, maxTokens: 4096 }), timeoutMs, `${worker.provider}/${worker.model}`)).then((result) => ({ index, result })).catch((error) => ({ index, error: error instanceof Error ? error : new Error(String(error)) })));
+  const outcomes = await Promise.all(pending);
+  const successfulWithCandidates = outcomes.filter((item): item is { index: number; result: CompletionResult } => "result" in item && Boolean(item.result.text?.trim())).map((item) => ({ candidate: workers[item.index], result: item.result }));
+  const successful = successfulWithCandidates.map((item) => item.result);
+  if (!successful.length) throw new Error("All configured Garvex providers failed or timed out.");
+  const evidence = successful.slice(0, 7).map((result, index) => `===== AGENT ${index + 1} | ${result.provider} | ${result.model} =====\n${result.text.slice(0, 16000)}`).join("\n\n");
+  const judgeCandidate = successfulWithCandidates[0].candidate;
+  const judgePrompt: ChatMessage[] = [{ role: "system", content: "You are Garvex's synthesis judge. Reconcile independent agent outputs. Prefer evidence-supported conclusions, flag uncertainty, preserve concrete technical details, and never invent actions or facts. Return only the final answer." }, ...messages.filter((m) => m.role !== "assistant"), { role: "user", content: `Independent agent outputs:\n${evidence}\n\nSynthesize the strongest correct result.` }];
+  try {
+    await waitForLocalRateSlot(providerRequestKey(judgeCandidate), judgeCandidate.provider === "nvidia" ? 1200 : 500);
+    const final = await withTimeout(providerFor(judgeCandidate.provider).complete(judgePrompt, { model: judgeCandidate.model, apiKey: judgeCandidate.apiKey, temperature: 0.05, maxTokens: 8192 }), Math.max(3000, Math.min(timeoutMs, 3500)), "judge");
+    return { ...final, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: workers.length - successful.length, strategy: "complex" as const };
+  } catch {
+    const fallback = successful[0];
+    return { ...fallback, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: workers.length - successful.length, strategy: "complex" as const };
+  }
+}
