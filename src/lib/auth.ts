@@ -8,8 +8,9 @@ import { hashPassword, randomToken, sha256, verifyPassword } from "@/lib/crypto"
 export const SESSION_COOKIE = "platform_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
 
-// Authentication is mandatory by default. A preview bypass is an explicit opt-in only.
-const AUTH_DISABLED = process.env.PLATFORM_AUTH_DISABLED === "1" && process.env.NODE_ENV !== "production";
+// Direct-access mode: no email/password login is required. Set PLATFORM_AUTH_DISABLED=0
+// to restore the normal authenticated flow.
+const AUTH_DISABLED = process.env.PLATFORM_AUTH_DISABLED !== "0";
 const BYPASS_CSRF_TOKEN = "temporary-preview-bypass";
 
 export type Role = "OWNER" | "ADMIN" | "DEVELOPER" | "VIEWER";
