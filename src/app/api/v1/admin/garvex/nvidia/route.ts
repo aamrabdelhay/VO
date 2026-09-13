@@ -25,7 +25,7 @@ function filePart(file: File): Promise<NvidiaPart> {
 export async function GET() {
   return handle(async () => {
     await requirePlatformAdmin();
-    return ok({ baseUrl: NVIDIA_BASE_URL, models: Object.entries(NVIDIA_MODELS).map(([name, model]) => ({ name, model, capabilities: NVIDIA_CAPABILITIES[model] })), freeEndpointNote: "NVIDIA marks these listed endpoints as Free Endpoint where available; trial traffic can be rate limited." });
+    return ok({ baseUrl: NVIDIA_BASE_URL, models: Object.entries(NVIDIA_MODELS).map(([name, model]) => ({ name, model, capabilities: NVIDIA_CAPABILITIES[model as NvidiaModelId] })), freeEndpointNote: "NVIDIA marks these listed endpoints as Free Endpoint where available; trial traffic can be rate limited." });
   });
 }
 
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     if (file instanceof File && file.size > 0) {
       if (file.size > 20 * 1024 * 1024) throw new Error("File is too large (max 20 MB).");
       const media = file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : file.type.startsWith("audio/") ? "audio" : null;
-      if (!media || !modelSupportsFile(model, media)) throw new Error(`${model} does not support ${media ?? "this"} file input.\`);`);
+      if (!media || !modelSupportsFile(model, media)) throw new Error(`${model} does not support ${media ?? "this"} file input.`);
       parts.push(await filePart(file));
     }
     const key = await keyOrThrow();
