@@ -1,7 +1,8 @@
 import { handle, ok } from "@/lib/api";
 import { assertCsrf, requirePlatformAdmin } from "@/lib/auth";
 import { getPlatformSecret, listPlatformSecretMetadata } from "@/lib/platform-secrets";
-import { isNvidiaModel, modelSupportsFile, NVIDIA_BASE_URL, NVIDIA_CAPABILITIES, NVIDIA_MODELS, type NvidiaModelId, type NvidiaPart } from "@/lib/ai/nvidia-catalog";
+import { isNvidiaChatModel, modelSupportsFile, NVIDIA_BASE_URL, NVIDIA_MODEL_CATALOG, NVIDIA_MODELS, type NvidiaModelId, type NvidiaPart } from "@/lib/ai/nvidia-catalog";
+import { getCapabilityPlan, getGarvexCapabilityPlans } from "@/lib/ai/capabilities";
 
 export const dynamic = "force-dynamic";
 
@@ -18,14 +19,18 @@ function filePart(file: File): Promise<NvidiaPart> {
     if (file.type.startsWith("image/")) return { type: "image_url", image_url: { url } };
     if (file.type.startsWith("video/")) return { type: "video_url", video_url: { url } };
     if (file.type.startsWith("audio/")) return { type: "audio_url", audio_url: { url } };
-    throw new Error("NVIDIA file input supports image, video, and audio files. Use the document parser for PDF/DOCX/TXT.");
+    throw new Error("NVIDIA file input supports image, video, and audio files. PDF/DOCX/TXT require a document parser capability.");
   });
 }
 
 export async function GET() {
   return handle(async () => {
     await requirePlatformAdmin();
-    return ok({ baseUrl: NVIDIA_BASE_URL, models: Object.entries(NVIDIA_MODELS).map(([name, model]) => ({ name, model, capabilities: NVIDIA_CAPABILITIES[model as NvidiaModelId] })), freeEndpointNote: "NVIDIA marks these listed endpoints as Free Endpoint where available; trial traffic can be rate limited." });
+    return ok({
+      baseUrl: NVIDIA_BASE_URL,
+      models: NVIDIA_MODEL_CATALOG,
+      capabilities: await getGarvexCapabilityPlans(),
+    });
   });
 }
 
@@ -35,7 +40,10 @@ export async function POST(request: Request) {
     await assertCsrf(user);
     const form = await request.formData();
     const requested = String(form.get("model") ?? NVIDIA_MODELS.omni);
-    if (!isNvidiaModel(requested)) throw new Error(`Unsupported NVIDIA model: ${requested}`);
+    if (!isNvidiaChatModel(requested)) {
+      const unsupported = NVIDIA_MODEL_CATALOG.find((item) => item.id === requested);
+      throw new Error(unsupported?.note ?? `NVIDIA model ${requested} is not available through the generic chat endpoint.`);
+    }
     const model = requested as NvidiaModelId;
     const prompt = String(form.get("prompt") ?? "Analyze the provided input carefully and answer the user's request.").slice(0, 20000);
     const file = form.get("file");
@@ -47,9 +55,10 @@ export async function POST(request: Request) {
       parts.push(await filePart(file));
     }
     const key = await keyOrThrow();
-    const response = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "user", content: parts }], max_tokens: model === NVIDIA_MODELS.deepseekV4 ? 16384 : 8192, temperature: model === NVIDIA_MODELS.deepseekV4 ? 0.8 : 0.3, top_p: 0.95, stream: false, ...(model === NVIDIA_MODELS.deepseekV4 ? { chat_template_kwargs: { thinking: true, reasoning_effort: "high" } } : model === NVIDIA_MODELS.omni || model === NVIDIA_MODELS.diffusionGemma ? { chat_template_kwargs: { enable_thinking: false } } : {}) }), cache: "no-store" });
+    const response = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "user", content: parts }], max_tokens: model === NVIDIA_MODELS.deepseekV4 ? 16384 : 8192, temperature: model === NVIDIA_MODELS.deepseekV4 ? 0.8 : 0.3, top_p: 0.95, stream: false, ...(model === NVIDIA_MODELS.deepseekV4 ? { chat_template_kwargs: { thinking: true, reasoning_effort: "high" } } : {}) }), cache: "no-store" });
     if (!response.ok) throw new Error(`NVIDIA ${model} request failed (${response.status}): ${await response.text()}`);
     const data = await response.json() as { choices?: { message?: { content?: string } }[]; usage?: unknown };
-    return ok({ model, answer: data.choices?.[0]?.message?.content ?? "", usage: data.usage ?? null });
+    const plan = getCapabilityPlan("multimodal-understanding");
+    return ok({ model, answer: data.choices?.[0]?.message?.content ?? "", usage: data.usage ?? null, fallback: plan.primary.model === model ? plan.fallbacks[0]?.model ?? null : null });
   });
 }
