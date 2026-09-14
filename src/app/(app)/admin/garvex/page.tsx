@@ -11,6 +11,7 @@ import { GarvexCapabilityPanel } from "@/components/garvex-capability-panel";
 import { GarvexOrb } from "@/components/garvex-orb";
 import { GarvexDefaultAI } from "@/components/garvex-default-ai";
 import { GarvexLiveVoice } from "@/components/garvex-live-voice";
+import { GarvexUiEnhancer } from "@/components/garvex-ui-enhancer";
 import "@/app/garvex-file-reader.css";
 import "@/app/garvex-capability-panel.css";
 import "@/app/garvex-v4.css";
@@ -38,6 +39,7 @@ export default async function GarvexPage() {
       </div>
     </div>
     <GarvexLiveVoice csrf={user.csrfToken} compact />
+    <GarvexUiEnhancer />
     <GarvexCapabilityPanel capabilities={capabilities} />
     <GarvexFileReader csrf={user.csrfToken} />
   </>;
