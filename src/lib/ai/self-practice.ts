@@ -26,51 +26,52 @@ type Problem = {
   error: string;
   buildCommand: string;
   synthetic?: boolean;
+  mutation?: MutationName;
 };
 type PatchResponse = { summary?: string; files: { path: string; content: string }[] };
+type MutationName = "typescript-type-error" | "invalid-import" | "invalid-export";
+
+type Mutation = { name: MutationName; apply: (workspace: string) => Promise<void> };
+const MUTATIONS: Mutation[] = [
+  {
+    name: "typescript-type-error",
+    async apply(workspace) {
+      const file = path.join(workspace, "src/lib/ai/agent.ts");
+      const original = await fs.readFile(file, "utf8");
+      await fs.writeFile(file, `${original}\nconst __selfPracticeMutationNever: never = 1;\n`, "utf8");
+    },
+  },
+  {
+    name: "invalid-import",
+    async apply(workspace) {
+      const file = path.join(workspace, "src/lib/ai/agent.ts");
+      const original = await fs.readFile(file, "utf8");
+      await fs.writeFile(file, `import { __selfPracticeMissingExport } from "./__self-practice-missing";\n${original}`, "utf8");
+    },
+  },
+  {
+    name: "invalid-export",
+    async apply(workspace) {
+      const file = path.join(workspace, "src/lib/ai/agent.ts");
+      const original = await fs.readFile(file, "utf8");
+      await fs.writeFile(file, `${original}\nexport const __selfPracticeMissingType: NotARealType = 1;\n`, "utf8");
+    },
+  },
+];
 
 async function ensureTable() {
-  await db.execute(sql`
-    create table if not exists self_practice_examples (
-      id text primary key,
-      project_id text not null references projects(id) on delete cascade,
-      source text not null,
-      problem_description text not null,
-      diff text not null,
-      validation_output text not null,
-      verified boolean not null default false,
-      created_at timestamptz not null default now()
-    )
-  `);
+  await db.execute(sql`create table if not exists self_practice_examples (id text primary key, project_id text not null references projects(id) on delete cascade, source text not null, problem_description text not null, diff text not null, validation_output text not null, verified boolean not null default false, created_at timestamptz not null default now())`);
   await db.execute(sql`create index if not exists self_practice_verified_idx on self_practice_examples(verified, created_at)`);
 }
-
 async function statsRaw() {
-  const result = await db.execute<{ attempts: number; running: number; passed: number }>(sql`
-    select count(*) filter (where created_at > now() - interval '1 day')::int as attempts,
-           count(*) filter (where status = 'running')::int as running,
-           count(*) filter (where status = 'succeeded' and created_at > now() - interval '1 day')::int as passed
-    from ai_actions where kind = 'SELF_PRACTICE'
-  `);
+  const result = await db.execute<{ attempts: number; running: number; passed: number }>(sql`select count(*) filter (where created_at > now() - interval '1 day')::int as attempts, count(*) filter (where status = 'running')::int as running, count(*) filter (where status = 'succeeded' and created_at > now() - interval '1 day')::int as passed from ai_actions where kind = 'SELF_PRACTICE'`);
   return result.rows?.[0] ?? { attempts: 0, running: 0, passed: 0 };
 }
-
 export async function getSelfPracticeStats() {
   await ensureTable();
-  const [stats, verified] = await Promise.all([
-    statsRaw(),
-    db.execute<{ total: number }>(sql`select count(*)::int as total from self_practice_examples where verified = true`),
-  ]);
+  const [stats, verified] = await Promise.all([statsRaw(), db.execute<{ total: number }>(sql`select count(*)::int as total from self_practice_examples where verified = true`)]);
   const attempts = Number(stats.attempts ?? 0);
-  return {
-    attemptedToday: attempts,
-    passRateToday: attempts ? Math.round((Number(stats.passed ?? 0) / attempts) * 100) : 0,
-    verifiedExamplesTotal: Number(verified.rows?.[0]?.total ?? 0),
-    running: Number(stats.running ?? 0),
-    dailyLimit: DAILY_LIMIT,
-    enabled: process.env.SELF_PRACTICE_ENABLED === "1",
-    providerMode: process.env.OLLAMA_BASE_URL ? "local Ollama" : "cloud fallback",
-  };
+  return { attemptedToday: attempts, passRateToday: attempts ? Math.round((Number(stats.passed ?? 0) / attempts) * 100) : 0, verifiedExamplesTotal: Number(verified.rows?.[0]?.total ?? 0), running: Number(stats.running ?? 0), dailyLimit: DAILY_LIMIT, enabled: process.env.SELF_PRACTICE_ENABLED === "1", providerMode: process.env.OLLAMA_BASE_URL ? "local Ollama" : "cloud fallback" };
 }
 
 export async function harvestProblems(source: "any" | "real" | "synthetic" = "any"): Promise<Problem[]> {
@@ -93,15 +94,14 @@ export async function harvestProblems(source: "any" | "real" | "synthetic" = "an
   if (source !== "real" && problems.length === 0) {
     const candidates = await db.select({ id: projects.id, orgId: projects.orgId, name: projects.name, lastSuccessfulCommitSha: projects.lastSuccessfulCommitSha, buildCommand: projects.buildCommand }).from(projects).where(isNotNull(projects.lastSuccessfulCommitSha)).orderBy(desc(projects.updatedAt)).limit(1);
     const project = candidates[0];
-    if (project?.lastSuccessfulCommitSha) problems.push({ source: "synthetic", projectId: project.id, orgId: project.orgId, deploymentId: null, commitSha: project.lastSuccessfulCommitSha, description: `Synthetic deterministic TypeScript failure on known-passing commit ${project.lastSuccessfulCommitSha.slice(0, 7)}`, error: "Deterministic mutation: const __selfPracticeMutationNever: never = 1", buildCommand: project.buildCommand ?? "npm run build", synthetic: true });
+    if (project?.lastSuccessfulCommitSha) problems.push({ source: "synthetic", projectId: project.id, orgId: project.orgId, deploymentId: null, commitSha: project.lastSuccessfulCommitSha, description: `Synthetic deterministic TypeScript failure on known-passing commit ${project.lastSuccessfulCommitSha.slice(0, 7)}`, error: "Deterministic mutation applied after baseline verification", buildCommand: project.buildCommand ?? "npm run build", synthetic: true, mutation: MUTATIONS[0].name });
   }
   return problems;
 }
 
 function parsePatch(text: string): PatchResponse | null {
   const candidate = text.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1] ?? text;
-  const start = candidate.indexOf("{");
-  const end = candidate.lastIndexOf("}");
+  const start = candidate.indexOf("{"); const end = candidate.lastIndexOf("}");
   if (start < 0 || end <= start) return null;
   try { const parsed = JSON.parse(candidate.slice(start, end + 1)) as PatchResponse; return Array.isArray(parsed.files) && parsed.files.length > 0 ? parsed : null; } catch { return null; }
 }
@@ -122,8 +122,7 @@ async function generationConfig(problem: Problem) {
   console.warn("Self-practice cloud fallback active: this run is not provider-independent. Configure OLLAMA_BASE_URL for local generation.");
   const config = await resolveAIConfig(problem.orgId);
   if (!config || config.provider === "ollama") throw new Error("No configured cloud provider is available for self-practice fallback");
-  const spent = await spentTodayCents(problem.orgId);
-  if (spent >= config.dailyBudgetCents) throw new Error("Existing per-org daily AI budget is exhausted");
+  if (await spentTodayCents(problem.orgId) >= config.dailyBudgetCents) throw new Error("Existing per-org daily AI budget is exhausted");
   return config;
 }
 
@@ -157,23 +156,29 @@ export async function runSelfPracticeJob(payload: Record<string, unknown> = {}) 
     const gateway = new ToolGateway({ projectId: project.id, orgId: project.orgId, conversationId: action.id, permission: "DEVELOPER", workspace, deploymentId: problem.deploymentId, secrets });
     let syntheticFailure = "";
     if (problem.synthetic) {
-      const target = path.join(workspace, "src/lib/ai/agent.ts");
-      const original = await fs.readFile(target, "utf8");
-      await fs.writeFile(target, `${original}\nconst __selfPracticeMutationNever: never = 1;\n`, "utf8");
-      const install = await gateway.call("run_install", { command: "npm ci" }); if (!install.ok) throw new Error(install.error);
-      const build = await gateway.call("run_build", { command: project.buildCommand ?? "npm run build" });
-      const exitCode = (build.result as { exitCode?: number } | undefined)?.exitCode; syntheticFailure = String((build.result as { output?: string } | undefined)?.output ?? "");
-      if (exitCode === 0) throw new Error("Synthetic mutation did not make the known-passing commit fail");
+      const baselineInstall = await gateway.call("run_install", { command: "npm ci" });
+      const baselineTests = project.testCommand ? await gateway.call("run_tests", { command: project.testCommand }) : null;
+      const baselineBuild = await gateway.call("run_build", { command: "npm run build" });
+      const baselineInstallCode = (baselineInstall.result as { exitCode?: number } | undefined)?.exitCode;
+      const baselineTestCode = baselineTests ? (baselineTests.result as { exitCode?: number } | undefined)?.exitCode : 0;
+      const baselineBuildCode = (baselineBuild.result as { exitCode?: number } | undefined)?.exitCode;
+      if (baselineInstallCode !== 0 || baselineTestCode !== 0 || baselineBuildCode !== 0) throw new Error(`Synthetic candidate was not actually passing before mutation: install=${baselineInstallCode} test=${baselineTestCode} build=${baselineBuildCode}`);
+      const mutation = MUTATIONS.find((item) => item.name === problem.mutation) ?? MUTATIONS[0];
+      await mutation.apply(workspace);
+      const mutatedBuild = await gateway.call("run_build", { command: "npm run build" });
+      const mutatedCode = (mutatedBuild.result as { exitCode?: number } | undefined)?.exitCode;
+      syntheticFailure = redact(String((mutatedBuild.result as { output?: string } | undefined)?.output ?? ""), secrets);
+      if (mutatedCode === 0) throw new Error(`Synthetic mutation ${mutation.name} did not produce a failing build`);
     }
     const [conversation] = await db.insert(aiConversations).values({ projectId: project.id, deploymentId: problem.deploymentId, permission: "DEVELOPER", title: "Self-practice repair", createdBy: "system" }).returning();
     const tree = await gateway.call("list_files", { path: "." });
-    const context = [`Source: ${problem.source}`, `Commit: ${problem.commitSha}`, `Problem: ${problem.description}`, `Reported failure: ${problem.error}`, `Build command: ${project.buildCommand ?? "npm run build"}`, `Synthetic failure output: ${syntheticFailure.slice(-8000)}`, `Workspace tree: ${JSON.stringify(tree.result).slice(0, 6000)}`, "Return the smallest safe repair as strict JSON."].join("\n");
+    const context = [`Source: ${problem.source}`, `Commit: ${problem.commitSha}`, `Problem: ${problem.description}`, `Reported failure: ${problem.error}`, `Build command: ${problem.buildCommand}`, `Synthetic failure output: ${syntheticFailure.slice(-8000)}`, `Workspace tree: ${JSON.stringify(tree.result).slice(0, 6000)}`, "Return the smallest safe repair as strict JSON.",].join("\n");
     const generated = await generateRepair(problem, conversation.id, context, secrets);
     const patch = parsePatch(generated.text); if (!patch) throw new Error("Attempt generation did not return a valid JSON patch");
     const applied = await gateway.call("apply_patch", { files: patch.files }); if (!applied.ok) throw new Error(applied.error);
     const install = await gateway.call("run_install", { command: "npm ci" });
     const tests = project.testCommand ? await gateway.call("run_tests", { command: project.testCommand }) : null;
-    const build = await gateway.call("run_build", { command: project.buildCommand ?? "npm run build" });
+    const build = await gateway.call("run_build", { command: "npm run build" });
     const installCode = (install.result as { exitCode?: number } | undefined)?.exitCode;
     const testCode = tests ? (tests.result as { exitCode?: number } | undefined)?.exitCode : 0;
     const buildCode = (build.result as { exitCode?: number } | undefined)?.exitCode;
