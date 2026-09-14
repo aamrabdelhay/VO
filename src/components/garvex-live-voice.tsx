@@ -35,6 +35,7 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
   const abortRef = useRef<AbortController | null>(null);
   const historyRef = useRef<LiveMessage[]>([]);
   const lastSpokenRef = useRef("");
+  const nextAudioSequenceRef = useRef(0);
 
   useEffect(() => {
     if (compact) setPortalTarget(document.querySelector(".garvex-v4-input-row"));
@@ -69,14 +70,11 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
 
   const playNextAudio = () => {
     if (!activeRef.current || speakingRef.current) return;
-    const next = audioQueueRef.current.shift();
-    if (!next) {
-      if (activeRef.current && !thinkingRef.current) {
-        setStatus("listening");
-        startRecognition();
-      }
-      return;
-    }
+    const ordered = [...audioQueueRef.current].sort((a, b) => a.sequence - b.sequence);
+    const nextIndex = ordered.findIndex((item) => item.sequence === nextAudioSequenceRef.current);
+    if (nextIndex < 0) return;
+    const next = ordered[nextIndex];
+    audioQueueRef.current = ordered.filter((_, index) => index !== nextIndex);
     const audio = new Audio(next.src);
     audioRef.current = audio;
     speakingRef.current = true;
@@ -86,23 +84,25 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
     audio.onended = () => {
       audioRef.current = null;
       speakingRef.current = false;
+      nextAudioSequenceRef.current += 1;
       playNextAudio();
     };
     audio.onerror = () => {
       audioRef.current = null;
       speakingRef.current = false;
+      nextAudioSequenceRef.current += 1;
       playNextAudio();
     };
     void audio.play().catch(() => {
       audioRef.current = null;
       speakingRef.current = false;
+      nextAudioSequenceRef.current += 1;
       playNextAudio();
     });
   };
 
   const queueAudio = (chunk: AudioChunk) => {
     audioQueueRef.current.push(chunk);
-    audioQueueRef.current.sort((a, b) => a.sequence - b.sequence);
     playNextAudio();
   };
 
@@ -111,11 +111,13 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
     abortRef.current = null;
     thinkingRef.current = false;
     stopAudio();
+    nextAudioSequenceRef.current = 0;
   };
 
   const streamReply = async (text: string) => {
     interrupt();
     thinkingRef.current = true;
+    nextAudioSequenceRef.current = 0;
     setStatus("thinking");
     setResponse("");
     setSources([]);
@@ -128,12 +130,10 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
       signal: controller.signal,
     });
     if (!res.ok || !res.body) throw new Error(`Live voice request failed (${res.status})`);
-
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let full = "";
-    let finalReceived = false;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -146,19 +146,17 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
         const payload = JSON.parse(line.slice(5).trim()) as { type: string; text?: string; error?: string; audio?: string; sequence?: number; stage?: string; sources?: Source[] };
         if (payload.type === "stage") setStatus("thinking");
         if (payload.type === "delta" && payload.text) { full += payload.text; setResponse(full); }
-        if (payload.type === "audio" && payload.audio) queueAudio({ sequence: payload.sequence ?? 0, src: payload.audio, text: payload.text ?? "" });
+        if (payload.type === "audio" && payload.audio) queueAudio({ sequence: payload.sequence ?? nextAudioSequenceRef.current, src: payload.audio, text: payload.text ?? "" });
         if (payload.type === "sources" && payload.sources?.length) setSources(payload.sources);
-        if (payload.type === "done") finalReceived = true;
         if (payload.type === "error") throw new Error(payload.error ?? "Live voice failed");
       }
     }
     historyRef.current = [...historyRef.current, { role: "user", content: text }, { role: "assistant", content: full }].slice(-12);
     thinkingRef.current = false;
     if (activeRef.current && !speakingRef.current) {
-      setStatus("listening");
-      startRecognition();
+      if (audioQueueRef.current.length) playNextAudio();
+      else { setStatus("listening"); startRecognition(); }
     }
-    void finalReceived;
   };
 
   const stop = () => {
@@ -171,10 +169,7 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
 
   const start = () => {
     const Ctor = getSpeechRecognition();
-    if (!Ctor) {
-      setResponse("Live Voice يحتاج Chrome أو Edge يدعم Speech Recognition.");
-      return;
-    }
+    if (!Ctor) { setResponse("Live Voice يحتاج Chrome أو Edge يدعم Speech Recognition."); return; }
     activeRef.current = true;
     setActive(true);
     thinkingRef.current = false;
@@ -194,12 +189,10 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
       }
       const visible = `${finalText}${interim}`.trim();
       if (visible) setTranscript(visible);
-
       if (speakingRef.current && interim.trim().length >= 6 && !similarityEnough(interim, lastSpokenRef.current)) {
         interrupt();
         setStatus("listening");
       }
-
       const spoken = finalText.trim();
       if (!spoken) return;
       if (speakingRef.current && similarityEnough(spoken, lastSpokenRef.current)) return;
@@ -207,18 +200,11 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
         if (aborted(error)) return;
         thinkingRef.current = false;
         setResponse(error instanceof Error ? error.message : String(error));
-        if (activeRef.current) {
-          setStatus("listening");
-          startRecognition();
-        }
+        if (activeRef.current) { setStatus("listening"); startRecognition(); }
       });
     };
-    recognition.onend = () => {
-      if (activeRef.current) startRecognition();
-    };
-    recognition.onerror = () => {
-      if (activeRef.current) setStatus("listening");
-    };
+    recognition.onend = () => { if (activeRef.current) startRecognition(); };
+    recognition.onerror = () => { if (activeRef.current) setStatus("listening"); };
     recognitionRef.current = recognition;
     startRecognition();
   };
