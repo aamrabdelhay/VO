@@ -12,20 +12,35 @@ export type ChatPart =
   | { type: "audio_url"; audio_url: { url: string } };
 export type ChatContent = string | ChatPart[];
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: ChatContent };
-export type CompletionResult = {
-  text: string;
-  tokensIn: number;
-  tokensOut: number;
-  costCents: number;
-  provider: string;
-  model: string;
-};
+export type CompletionResult = { text: string; tokensIn: number; tokensOut: number; costCents: number; provider: string; model: string };
 export interface AIProvider { readonly name: string; complete(messages: ChatMessage[], opts: ProviderOptions): Promise<CompletionResult>; }
 export type ProviderOptions = { model: string; apiKey: string; baseUrl?: string | null; temperature: number; maxTokens: number };
 
 const PRICING: Record<string, { in: number; out: number }> = { default: { in: 0.03, out: 0.15 } };
 function estimateCost(tokensIn: number, tokensOut: number) { const p = PRICING.default; return (tokensIn / 1000) * p.in + (tokensOut / 1000) * p.out; }
-function textContent(content: ChatContent) { return typeof content === "string" ? content : content.filter((part) => part.type === "text").map((part) => part.text).join("\n"); }
+export function textContent(content: ChatContent) { return typeof content === "string" ? content : content.filter((part) => part.type === "text").map((part) => part.text).join("\n"); }
+
+class OllamaProvider implements AIProvider {
+  readonly name = "ollama";
+  async complete(messages: ChatMessage[], opts: ProviderOptions) {
+    const base = (opts.baseUrl ?? process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434").replace(/\/$/, "");
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (opts.apiKey) headers.authorization = `Bearer ${opts.apiKey}`;
+    const response = await fetch(`${base}/api/chat`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: opts.model,
+        stream: false,
+        messages: messages.map((message) => ({ role: message.role, content: textContent(message.content) })),
+        options: { temperature: opts.temperature, num_predict: opts.maxTokens },
+      }),
+    });
+    if (!response.ok) throw new Error(`Ollama request failed (${response.status}): ${await response.text()}`);
+    const data = (await response.json()) as { message?: { content?: string }; prompt_eval_count?: number; eval_count?: number };
+    return { text: data.message?.content ?? "", tokensIn: data.prompt_eval_count ?? 0, tokensOut: data.eval_count ?? 0, costCents: 0, provider: this.name, model: opts.model };
+  }
+}
 
 class AnthropicProvider implements AIProvider {
   readonly name = "anthropic";
@@ -35,8 +50,7 @@ class AnthropicProvider implements AIProvider {
     const res = await fetch(`${opts.baseUrl ?? "https://api.anthropic.com"}/v1/messages`, { method: "POST", headers: { "content-type": "application/json", "x-api-key": opts.apiKey, "anthropic-version": "2023-06-01" }, body: JSON.stringify({ model: opts.model, max_tokens: opts.maxTokens, temperature: opts.temperature, system, messages: rest.map((m) => ({ role: m.role, content: textContent(m.content) })) }) });
     if (!res.ok) throw new Error(`Anthropic request failed (${res.status}): ${await res.text()}`);
     const data = (await res.json()) as { content: { type: string; text?: string }[]; usage?: { input_tokens: number; output_tokens: number } };
-    const text = data.content.map((c) => c.text ?? "").join("");
-    const tokensIn = data.usage?.input_tokens ?? 0; const tokensOut = data.usage?.output_tokens ?? 0;
+    const text = data.content.map((c) => c.text ?? "").join(""); const tokensIn = data.usage?.input_tokens ?? 0; const tokensOut = data.usage?.output_tokens ?? 0;
     return { text, tokensIn, tokensOut, costCents: estimateCost(tokensIn, tokensOut), provider: this.name, model: opts.model };
   }
 }
@@ -60,8 +74,7 @@ class GeminiProvider implements AIProvider {
     const res = await fetch(`${base}/models/${opts.model}:generateContent?key=${opts.apiKey}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ contents: messages.filter((m) => m.role !== "system").map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: textContent(m.content) }] })), systemInstruction: { parts: [{ text: messages.filter((m) => m.role === "system").map((m) => textContent(m.content)).join("\n") }] }, generationConfig: { temperature: opts.temperature, maxOutputTokens: opts.maxTokens } }) });
     if (!res.ok) throw new Error(`Gemini request failed (${res.status}): ${await res.text()}`);
     const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[]; usageMetadata?: { promptTokenCount: number; candidatesTokenCount: number } };
-    const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-    const tokensIn = data.usageMetadata?.promptTokenCount ?? 0; const tokensOut = data.usageMetadata?.candidatesTokenCount ?? 0;
+    const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? ""; const tokensIn = data.usageMetadata?.promptTokenCount ?? 0; const tokensOut = data.usageMetadata?.candidatesTokenCount ?? 0;
     return { text, tokensIn, tokensOut, costCents: estimateCost(tokensIn, tokensOut), provider: this.name, model: opts.model };
   }
 }
@@ -72,14 +85,14 @@ class CohereProvider implements AIProvider {
     const res = await fetch(`${opts.baseUrl ?? "https://api.cohere.com/v2"}/chat`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` }, body: JSON.stringify({ model: opts.model, messages: messages.map((m) => ({ role: m.role, content: textContent(m.content) })), temperature: opts.temperature, max_tokens: opts.maxTokens }) });
     if (!res.ok) throw new Error(`Cohere request failed (${res.status}): ${await res.text()}`);
     const data = (await res.json()) as { message?: { content?: { type: string; text?: string }[] }; usage?: { tokens?: { input_tokens?: number; output_tokens?: number } } };
-    const text = data.message?.content?.map((part) => part.text ?? "").join("") ?? "";
-    const tokensIn = data.usage?.tokens?.input_tokens ?? 0; const tokensOut = data.usage?.tokens?.output_tokens ?? 0;
+    const text = data.message?.content?.map((part) => part.text ?? "").join("") ?? ""; const tokensIn = data.usage?.tokens?.input_tokens ?? 0; const tokensOut = data.usage?.tokens?.output_tokens ?? 0;
     return { text, tokensIn, tokensOut, costCents: estimateCost(tokensIn, tokensOut), provider: this.name, model: opts.model };
   }
 }
 
 export function providerFor(name: string): AIProvider {
   switch (name) {
+    case "ollama": return new OllamaProvider();
     case "anthropic": return new AnthropicProvider();
     case "gemini": return new GeminiProvider();
     case "cohere": return new CohereProvider();
@@ -108,10 +121,10 @@ export async function resolveAIConfig(orgId: string): Promise<ResolvedAIConfig |
   return { provider, model: process.env.AI_MODEL ?? defaultModel(provider), apiKey, baseUrl: process.env.AI_BASE_URL ?? null, temperature: 0.1, maxTokens: 4096, dailyBudgetCents: 500 };
 }
 function envKeyFor(provider: string) {
-  const direct: Record<string, string> = { anthropic: "ANTHROPIC_API_KEY", openai: "OPENAI_API_KEY", gemini: "GEMINI_API_KEY", nvidia: "NVIDIA_API_KEY", openrouter: "OPENROUTER_API_KEY", mistral: "MISTRAL_API_KEY", cerebras: "CEREBRAS_API_KEY", groq: "GROQ_API_KEY", kilo: "KILO_API_KEY", cohere: "COHERE_API_KEY" };
+  const direct: Record<string, string> = { ollama: "OLLAMA_API_KEY", anthropic: "ANTHROPIC_API_KEY", openai: "OPENAI_API_KEY", gemini: "GEMINI_API_KEY", nvidia: "NVIDIA_API_KEY", openrouter: "OPENROUTER_API_KEY", mistral: "MISTRAL_API_KEY", cerebras: "CEREBRAS_API_KEY", groq: "GROQ_API_KEY", kilo: "KILO_API_KEY", cohere: "COHERE_API_KEY" };
   return process.env[direct[provider] ?? "AI_API_KEY"] ?? (provider === "gemini" ? process.env.GOOGLE_API_KEY ?? null : null);
 }
-function defaultModel(provider: string) { if (provider === "anthropic") return "claude-sonnet-4-5"; if (provider === "openai") return "gpt-4o-mini"; if (provider === "gemini") return "gemini-2.0-flash"; return NVIDIA_MODELS.deepseekV4; }
+function defaultModel(provider: string) { if (provider === "ollama") return process.env.OLLAMA_MODEL ?? "qwen2.5-coder"; if (provider === "anthropic") return "claude-sonnet-4-5"; if (provider === "openai") return "gpt-4o-mini"; if (provider === "gemini") return "gemini-2.0-flash"; return NVIDIA_MODELS.deepseekV4; }
 export async function spentTodayCents(orgId: string): Promise<number> { const rows = await db.execute<{ total: number }>(sql`select coalesce(sum(m.cost_cents), 0) as total from ${aiMessages} m join ai_conversations c on c.id = m.conversation_id join projects p on p.id = c.project_id where p.org_id = ${orgId} and m.created_at > now() - interval '1 day';`); return Number(rows.rows?.[0]?.total ?? 0); }
 
 type Candidate = { provider: string; model: string; apiKey: string; credentialId: string; source: "platform" | "environment" };
@@ -152,54 +165,22 @@ export async function getGarvexProviderStatus() {
 
 const rateState = new Map<string, number>();
 async function waitForLocalRateSlot(key: string, minIntervalMs = 1000) {
-  const previous = rateState.get(key) ?? 0; const waitMs = Math.max(0, previous + minIntervalMs - Date.now());
-  if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
-  rateState.set(key, Date.now());
+  const previous = rateState.get(key) ?? 0; const waitMs = Math.max(0, previous + minIntervalMs - Date.now()); if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs)); rateState.set(key, Date.now());
 }
 function errorStatus(error: unknown) { const match = String(error instanceof Error ? error.message : error).match(/\((4\d\d|5\d\d)\)/); return match ? Number(match[1]) : null; }
 function providerRequestKey(candidate: Candidate) { return `${candidate.provider}:${candidate.model}`; }
-function orderedCandidates(candidates: Candidate[]) {
-  const preferred = [NVIDIA_MODELS.deepseekV4, NVIDIA_MODELS.deepseekV4Pro, NVIDIA_MODELS.glm52, NVIDIA_MODELS.nemotron35Lightning, NVIDIA_MODELS.omni];
-  const rank = (model: string) => { const index = preferred.indexOf(model); return index === -1 ? preferred.length + 10 : index; };
-  return [...candidates].sort((a, b) => rank(a.model) - rank(b.model));
-}
-async function completeSingle(messages: ChatMessage[], candidates: Candidate[], timeoutMs: number) {
-  let lastError: Error | null = null;
-  for (const candidate of orderedCandidates(candidates)) {
-    try {
-      await waitForLocalRateSlot(providerRequestKey(candidate), candidate.provider === "nvidia" ? 1200 : 500);
-      return await withTimeout(providerFor(candidate.provider).complete(messages, { model: candidate.model, apiKey: candidate.apiKey, temperature: 0.1, maxTokens: 4096 }), timeoutMs, `${candidate.provider}/${candidate.model}`);
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      const status = errorStatus(error); if (status === 429) await new Promise((resolve) => setTimeout(resolve, 1500));
-    }
-  }
-  throw lastError ?? new Error("No working Garvex credential is available.");
-}
+function orderedCandidates(candidates: Candidate[]) { const preferred = [NVIDIA_MODELS.deepseekV4, NVIDIA_MODELS.deepseekV4Pro, NVIDIA_MODELS.glm52, NVIDIA_MODELS.nemotron35Lightning, NVIDIA_MODELS.omni]; const rank = (model: string) => { const index = preferred.indexOf(model); return index === -1 ? preferred.length + 10 : index; }; return [...candidates].sort((a, b) => rank(a.model) - rank(b.model)); }
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) { return new Promise<T>((resolve, reject) => { const timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs); promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); }); }); }
+async function completeSingle(messages: ChatMessage[], candidates: Candidate[], timeoutMs: number) { let lastError: Error | null = null; for (const candidate of orderedCandidates(candidates)) { try { await waitForLocalRateSlot(providerRequestKey(candidate), candidate.provider === "nvidia" ? 1200 : 500); return await withTimeout(providerFor(candidate.provider).complete(messages, { model: candidate.model, apiKey: candidate.apiKey, temperature: 0.1, maxTokens: 4096 }), timeoutMs, `${candidate.provider}/${candidate.model}`); } catch (error) { lastError = error instanceof Error ? error : new Error(String(error)); const status = errorStatus(error); if (status === 429) await new Promise((resolve) => setTimeout(resolve, 1500)); } } throw lastError ?? new Error("No working Garvex credential is available."); }
 export async function multiAgentComplete(messages: ChatMessage[], opts?: { maxWorkers?: number; timeoutMs?: number; quorum?: number; strategy?: "single" | "complex" }) {
   const candidates = await configuredCouncil();
-  if (!candidates.length) {
-    const statuses = await getGarvexProviderStatus(); const unreadable = statuses.filter((item) => item.stored > 0 && item.readable === 0).map((item) => item.provider);
-    throw new Error(unreadable.length ? `Garvex found ${unreadable.length} stored provider credential(s), but they cannot be decrypted in this deployment (${unreadable.join(", ")}). Re-save those keys in Platform Settings, and keep PLATFORM_ENCRYPTION_KEY stable across deployments.` : "No Garvex provider keys are configured. Add provider API keys in Platform Settings or Vercel environment variables.");
-  }
+  if (!candidates.length) { const statuses = await getGarvexProviderStatus(); const unreadable = statuses.filter((item) => item.stored > 0 && item.readable === 0).map((item) => item.provider); throw new Error(unreadable.length ? `Garvex found ${unreadable.length} stored provider credential(s), but they cannot be decrypted in this deployment (${unreadable.join(", ")}). Re-save those keys in Platform Settings, and keep PLATFORM_ENCRYPTION_KEY stable across deployments.` : "No Garvex provider keys are configured. Add provider API keys in Platform Settings or Vercel environment variables."); }
   const timeoutMs = opts?.timeoutMs ?? 4500; const strategy = opts?.strategy ?? "single";
   if (strategy === "single") { const result = await completeSingle(messages, candidates, timeoutMs); return { ...result, workers: [{ provider: result.provider, model: result.model, tokensIn: result.tokensIn, tokensOut: result.tokensOut }], failedWorkers: 0, strategy: "single" as const }; }
   const maxWorkers = Math.min(opts?.maxWorkers ?? Math.min(candidates.length, 6), candidates.length); const workers = orderedCandidates(candidates).slice(0, maxWorkers);
   const pending = workers.map((worker, index) => waitForLocalRateSlot(providerRequestKey(worker), worker.provider === "nvidia" ? 1200 : 500).then(() => withTimeout(providerFor(worker.provider).complete(messages, { model: worker.model, apiKey: worker.apiKey, temperature: 0.1, maxTokens: 4096 }), timeoutMs, `${worker.provider}/${worker.model}`)).then((result) => ({ index, result })).catch((error) => ({ index, error: error instanceof Error ? error : new Error(String(error)) })));
-  const outcomes = await Promise.all(pending);
-  const successfulWithCandidates = outcomes.filter((item): item is { index: number; result: CompletionResult } => "result" in item && Boolean(item.result.text?.trim())).map((item) => ({ candidate: workers[item.index], result: item.result }));
-  const successful = successfulWithCandidates.map((item) => item.result);
-  if (!successful.length) throw new Error("All configured Garvex providers failed or timed out.");
-  const evidence = successful.slice(0, 7).map((result, index) => `===== AGENT ${index + 1} | ${result.provider} | ${result.model} =====\n${result.text.slice(0, 16000)}`).join("\n\n");
-  const judgeCandidate = successfulWithCandidates[0].candidate;
+  const outcomes = await Promise.all(pending); const successfulWithCandidates = outcomes.filter((item): item is { index: number; result: CompletionResult } => "result" in item && Boolean(item.result.text?.trim())).map((item) => ({ candidate: workers[item.index], result: item.result })); const successful = successfulWithCandidates.map((item) => item.result); if (!successful.length) throw new Error("All configured Garvex providers failed or timed out.");
+  const evidence = successful.slice(0, 7).map((result, index) => `===== AGENT ${index + 1} | ${result.provider} | ${result.model} =====\n${result.text.slice(0, 16000)}`).join("\n\n"); const judgeCandidate = successfulWithCandidates[0].candidate;
   const judgePrompt: ChatMessage[] = [{ role: "system", content: "You are Garvex's synthesis judge. Reconcile independent agent outputs. Prefer evidence-supported conclusions, flag uncertainty, preserve concrete technical details, and never invent actions or facts. Return only the final answer." }, ...messages.filter((m) => m.role !== "assistant"), { role: "user", content: `Independent agent outputs:\n${evidence}\n\nSynthesize the strongest correct result.` }];
-  try {
-    await waitForLocalRateSlot(providerRequestKey(judgeCandidate), judgeCandidate.provider === "nvidia" ? 1200 : 500);
-    const final = await withTimeout(providerFor(judgeCandidate.provider).complete(judgePrompt, { model: judgeCandidate.model, apiKey: judgeCandidate.apiKey, temperature: 0.05, maxTokens: 8192 }), Math.max(3000, Math.min(timeoutMs, 3500)), "judge");
-    return { ...final, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: workers.length - successful.length, strategy: "complex" as const };
-  } catch {
-    const fallback = successful[0];
-    return { ...fallback, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: workers.length - successful.length, strategy: "complex" as const };
-  }
+  try { await waitForLocalRateSlot(providerRequestKey(judgeCandidate), judgeCandidate.provider === "nvidia" ? 1200 : 500); const final = await withTimeout(providerFor(judgeCandidate.provider).complete(judgePrompt, { model: judgeCandidate.model, apiKey: judgeCandidate.apiKey, temperature: 0.05, maxTokens: 8192 }), Math.max(3000, Math.min(timeoutMs, 3500)), "judge"); return { ...final, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: workers.length - successful.length, strategy: "complex" as const }; } catch { const fallback = successful[0]; return { ...fallback, workers: successful.map((item) => ({ provider: item.provider, model: item.model, tokensIn: item.tokensIn, tokensOut: item.tokensOut })), failedWorkers: workers.length - successful.length, strategy: "complex" as const }; }
 }
