@@ -6,24 +6,14 @@ type VoiceStatus = "off" | "listening" | "thinking" | "speaking";
 type LiveMessage = { role: "user" | "assistant"; content: string };
 type RecognitionLike = { continuous: boolean; interimResults: boolean; lang: string; start: () => void; stop: () => void; onresult: ((event: any) => void) | null; onend: (() => void) | null; onerror: ((event: any) => void) | null };
 type SpeechRecognitionCtor = new () => RecognitionLike;
-
 type LiveVoiceProps = { csrf: string; compact?: boolean };
 
 function getSpeechRecognition() {
   const w = window as any;
   return (w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null) as SpeechRecognitionCtor | null;
 }
-
-function normalize(text: string) {
-  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-}
-
-function similarityEnough(a: string, b: string) {
-  const x = normalize(a);
-  const y = normalize(b);
-  if (!x || !y) return false;
-  return x === y || x.includes(y) || y.includes(x);
-}
+function normalize(text: string) { return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim(); }
+function similarityEnough(a: string, b: string) { const x = normalize(a); const y = normalize(b); return Boolean(x && y && (x === y || x.includes(y) || y.includes(x))); }
 
 export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
   const [active, setActive] = useState(false);
@@ -34,7 +24,7 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
   const activeRef = useRef(false);
   const speakingRef = useRef(false);
   const thinkingRef = useRef(false);
-  const audioQueueRef = useRef<{ sequence: number; src: string }[]>([]);
+  const audioQueueRef = useRef<{ sequence: number; src: string; text: string }[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const historyRef = useRef<LiveMessage[]>([]);
@@ -74,28 +64,16 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
     const audio = new Audio(next.src);
     audioRef.current = audio;
     speakingRef.current = true;
-    lastSpokenRef.current = response;
+    lastSpokenRef.current = next.text;
     setStatus("speaking");
-    audio.onended = () => {
-      audioRef.current = null;
-      speakingRef.current = false;
-      playNextAudio();
-    };
-    audio.onerror = () => {
-      audioRef.current = null;
-      speakingRef.current = false;
-      playNextAudio();
-    };
-    void audio.play().catch(() => {
-      audioRef.current = null;
-      speakingRef.current = false;
-      playNextAudio();
-    });
+    audio.onended = () => { audioRef.current = null; speakingRef.current = false; playNextAudio(); };
+    audio.onerror = () => { audioRef.current = null; speakingRef.current = false; playNextAudio(); };
+    void audio.play().catch(() => { audioRef.current = null; speakingRef.current = false; playNextAudio(); });
   };
 
-  const queueAudio = (src: string, sequence: number) => {
+  const queueAudio = (src: string, sequence: number, text: string) => {
     if (!src) return;
-    audioQueueRef.current.push({ sequence, src });
+    audioQueueRef.current.push({ sequence, src, text });
     audioQueueRef.current.sort((a, b) => a.sequence - b.sequence);
     playNextAudio();
   };
@@ -114,12 +92,7 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
     setResponse("");
     const controller = new AbortController();
     abortRef.current = controller;
-    const res = await fetch("/api/v1/admin/garvex/live", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-csrf-token": csrf },
-      body: JSON.stringify({ prompt: text, history: historyRef.current.slice(-8) }),
-      signal: controller.signal,
-    });
+    const res = await fetch("/api/v1/admin/garvex/live", { method: "POST", headers: { "content-type": "application/json", "x-csrf-token": csrf }, body: JSON.stringify({ prompt: text, history: historyRef.current.slice(-8) }), signal: controller.signal });
     if (!res.ok || !res.body) throw new Error(`Live voice request failed (${res.status})`);
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -136,7 +109,7 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
         if (!line) continue;
         const payload = JSON.parse(line.slice(5).trim()) as { type: string; text?: string; error?: string; audio?: string; sequence?: number };
         if (payload.type === "delta" && payload.text) { full += payload.text; setResponse(full); }
-        if (payload.type === "audio" && payload.audio) queueAudio(payload.audio, payload.sequence ?? 0);
+        if (payload.type === "audio" && payload.audio) queueAudio(payload.audio, payload.sequence ?? 0, payload.text ?? "");
         if (payload.type === "error") throw new Error(payload.error ?? "Live voice failed");
       }
     }
@@ -186,14 +159,8 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
         if (activeRef.current) setStatus("listening");
       });
     };
-    recognition.onend = () => {
-      if (activeRef.current && !thinkingRef.current) {
-        try { recognition.start(); } catch {}
-      }
-    };
-    recognition.onerror = () => {
-      if (activeRef.current && !thinkingRef.current) setStatus("listening");
-    };
+    recognition.onend = () => { if (activeRef.current && !thinkingRef.current) { try { recognition.start(); } catch {} } };
+    recognition.onerror = () => { if (activeRef.current && !thinkingRef.current) setStatus("listening"); };
     recognitionRef.current = recognition;
     try { recognition.start(); } catch {}
   };
@@ -212,6 +179,4 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
   );
 }
 
-function controllerIsAborted(error: unknown) {
-  return error instanceof DOMException && error.name === "AbortError";
-}
+function controllerIsAborted(error: unknown) { return error instanceof DOMException && error.name === "AbortError"; }
