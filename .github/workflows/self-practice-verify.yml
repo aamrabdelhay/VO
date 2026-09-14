@@ -23,20 +23,24 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Repair transformer template nesting before execution
+      - name: Canonicalize generated source literals before parsing
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import json
           p = Path('scripts/apply-self-practice.mjs')
           s = p.read_text()
-          start = s.index('const selfPractice = `')
-          end = s.index('`;\nawait write("src/lib/ai/self-practice.ts"', start)
-          block = s[start:end]
-          first = block.find('`')
-          body = block[first + 1:]
-          body = body.replace('`', '\\`')
-          s = s[:first + 1 + start] if False else s
-          s = s[:start] + block[:first + 1] + body + s[end:]
+          def canonicalize(prefix, end_marker):
+              nonlocal s
+              start = s.index(prefix)
+              body_start = start + len(prefix)
+              if s[body_start] != '`':
+                  return
+              end = s.index(end_marker, body_start + 1)
+              body = s[body_start + 1:end]
+              s = s[:start] + prefix[:-1] + json.dumps(body) + s[end:]
+          canonicalize('const ollamaClass = `', '`;\nawait write("src/lib/ai/provider.ts"')
+          canonicalize('const selfPractice = `', '`;\nawait write("src/lib/ai/self-practice.ts"')
           p.write_text(s)
           PY
       - run: node --check scripts/apply-self-practice.mjs
