@@ -22,7 +22,29 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: node --check scripts/apply-self-practice.mjs
       - run: node scripts/apply-self-practice.mjs
+      - name: Harden generated sandbox containment and deployment build command
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const gateway = 'src/lib/ai/gateway.ts';
+          let s = fs.readFileSync(gateway, 'utf8');
+          if (!s.includes('@/lib/ai/workspace-path')) {
+            s = s.replace('import { redact } from "@/lib/crypto";', 'import { redact } from "@/lib/crypto";\nimport { resolveWorkspacePath } from "@/lib/ai/workspace-path";');
+          }
+          const oldBlock = '    const full = path.resolve(this.ctx.workspace, relative);\n    if (!full.startsWith(path.resolve(this.ctx.workspace))) {\n      throw new ToolDenied("Path escapes the isolated workspace");\n    }\n    return full;';
+          const newBlock = '    try { return resolveWorkspacePath(this.ctx.workspace, relative); } catch { throw new ToolDenied("Path escapes the isolated workspace"); }';
+          if (s.includes(oldBlock)) s = s.replace(oldBlock, newBlock);
+          fs.writeFileSync(gateway, s);
+
+          const sp = 'src/lib/ai/self-practice.ts';
+          let p = fs.readFileSync(sp, 'utf8');
+          p = p.replace('row.deployment.buildCommand ?? row.project.buildCommand', 'row.project.buildCommand');
+          p = p.replace('import { and, count, desc, eq, isNotNull, sql } from "drizzle-orm";', 'import { and, desc, eq, isNotNull, sql } from "drizzle-orm";');
+          p = p.replace('import { runCommand } from "@/lib/runtime";\n', '');
+          fs.writeFileSync(sp, p);
+          NODE
       - run: npx tsc --noEmit
       - run: npx eslint .
       - run: npm run build
@@ -35,6 +57,7 @@ jobs:
           git config user.name "vo-bot"
           git config user.email "vo-bot@users.noreply.github.com"
           git add src scripts docs package.json .env.example
+          git diff --cached --quiet && { echo "No implementation diff was generated"; exit 1; }
           git commit -m "feat: add self-supervised code repair loop"
           git push origin "$BRANCH"
-          gh pr create --base main --head "$BRANCH" --title "feat: self-supervised code repair loop" --body "Implementation branch. tsc, eslint, and build run before opening this PR." || true
+          gh pr create --base main --head "$BRANCH" --title "feat: self-supervised code repair loop" --body "Implementation branch. tsc, eslint, and build run before opening this PR. Correctness is judged only by execution exit codes; no LLM judge is used."
