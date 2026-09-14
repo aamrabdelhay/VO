@@ -30,11 +30,13 @@ export default async function GarvexPage() {
   const typedProviders = providers.map((provider) => ({ ...provider, state: provider.state as "ready" | "stored-unreadable" | "missing" }));
   return <>
     <GarvexDefaultAI />
-    <div className="garvex-v4-orb-wrap" aria-label="Garvex">
-      <GarvexOrb size={180} />
-      <span className="garvex-v4-orb-label">GARVEX CORE</span>
+    <div className="garvex-v4-chat-stage">
+      <GarvexChatV4 csrf={user.csrfToken} providers={typedProviders} projects={projectList} isPlatformAdmin={user.isPlatformAdmin} />
+      <div className="garvex-v4-orb-wrap" aria-label="Garvex">
+        <GarvexOrb size={180} />
+        <span className="garvex-v4-orb-label">GARVEX CORE</span>
+      </div>
     </div>
-    <GarvexChatV4 csrf={user.csrfToken} providers={typedProviders} projects={projectList} isPlatformAdmin={user.isPlatformAdmin} />
     <GarvexLiveVoice csrf={user.csrfToken} />
     <GarvexCapabilityPanel capabilities={capabilities} />
     <GarvexFileReader csrf={user.csrfToken} />
