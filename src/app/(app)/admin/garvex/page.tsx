@@ -37,7 +37,7 @@ export default async function GarvexPage() {
         <span className="garvex-v4-orb-label">GARVEX CORE</span>
       </div>
     </div>
-    <GarvexLiveVoice csrf={user.csrfToken} />
+    <GarvexLiveVoice csrf={user.csrfToken} compact />
     <GarvexCapabilityPanel capabilities={capabilities} />
     <GarvexFileReader csrf={user.csrfToken} />
   </>;
