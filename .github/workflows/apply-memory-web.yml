@@ -1,0 +1,31 @@
+name: Apply Garvex memory and web capabilities
+
+on:
+  push:
+    paths:
+      - .vo-feature-memory-web
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/feature-memory-web.mjs
+      - run: npx tsc --noEmit
+      - run: npx eslint .
+      - run: npm run build
+      - name: Commit applied changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: add Garvex persistent memory and web research" || exit 0
+          git push
