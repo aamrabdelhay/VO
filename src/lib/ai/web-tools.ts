@@ -11,6 +11,7 @@ function isPrivate(address: string) {
     return a === 10 || a === 127 || (a === 169 && b === 254) || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || a === 0;
   }
   const value = address.toLowerCase();
+  if (value.startsWith("::ffff:")) return isPrivate(value.slice(7));
   return value === "::1" || value === "::" || value.startsWith("fe80:") || value.startsWith("fc") || value.startsWith("fd");
 }
 
