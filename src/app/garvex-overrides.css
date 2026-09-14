@@ -1,56 +1,50 @@
-/* Garvex interaction/layout fixes */
+/* Garvex refined presentation layer */
 .vo-scroll-stage{display:flex;flex-direction:column;gap:12px;min-width:0;overflow:auto!important}
 .garvex-v4-shell{order:1;width:100%;min-width:0}
 .garvex-capability-panel{order:3;width:100%;margin-top:0}
 .garvex-v4-chat-stage{position:relative;width:100%;order:1}
-/* Garvex orb lives inside the main conversation surface, not inside the composer. */
-.garvex-v4-orb-wrap{position:absolute;z-index:12;top:92px;left:50%;width:180px;height:180px;min-height:180px;margin:0;display:flex;align-items:center;justify-content:center;pointer-events:none;transform:translateX(-50%);transition:opacity 180ms ease,transform 180ms ease,visibility 180ms ease}
-.garvex-v4-orb-wrap canvas{width:180px!important;height:180px!important;max-width:none;filter:drop-shadow(0 0 26px rgba(50,120,255,.24))}
-.garvex-v4-orb-label{display:none}
-/* The welcome state makes room for the orb inside the conversation panel. */
-.garvex-v4-welcome{min-height:calc(min(620px,62vh) - 30px);padding-top:150px;box-sizing:border-box}
-/* Once the first chat message exists, the orb disappears like a ChatGPT-style welcome state. */
-.garvex-v4-chat-stage:has(.garvex-v4-message) .garvex-v4-orb-wrap{opacity:0;visibility:hidden;transform:translateX(-50%) scale(.82)}
-/* Never open the workspace drawer automatically from chat/voice/media actions. */
-.garvex-v4-drawer.workspace,.garvex-v4-drawer.workspace.open{display:none!important}
-/* Keep the conversation as the visual focus. */
-.garvex-v4-main{padding-top:20px}
-/* Safe progressive reveal: response text appears gradually instead of popping in as one block. */
-.garvex-v4-message.assistant .garvex-v4-content{animation:garvexV4AnswerReveal 1800ms steps(36,end) both;overflow:hidden;clip-path:inset(0 0 100% 0)}
-@keyframes garvexV4AnswerReveal{0%{clip-path:inset(0 0 100% 0);opacity:.35}100%{clip-path:inset(0 0 0 0);opacity:1}}
-/* Remove the obsolete record button; Live Voice replaces it. */
+
+/* Orb: inside the main conversation welcome panel, never inside the composer. */
+.garvex-v4-welcome .garvex-v4-orb-wrap{position:relative;inset:auto;width:clamp(150px,20vw,192px);height:clamp(150px,20vw,192px);min-height:0;margin:0 auto 10px;display:flex;align-items:center;justify-content:center;transform:none;z-index:1;pointer-events:none;transition:opacity 260ms ease,transform 260ms ease,filter 260ms ease}
+.garvex-v4-welcome .garvex-v4-orb-wrap canvas{width:100%!important;height:100%!important;max-width:none;filter:drop-shadow(0 0 30px rgba(50,120,255,.26));image-rendering:auto}
+.garvex-v4-welcome .garvex-v4-orb-label{display:none}
+.garvex-v4-chat-stage:has(.garvex-v4-message) .garvex-v4-orb-wrap{opacity:0;visibility:hidden;transform:scale(.88);filter:blur(2px)}
+
+/* Message bubbles shrink to content. */
+.garvex-v4-message{width:fit-content;max-width:min(780px,calc(100% - 18px));margin:0 0 18px;padding:0}
+.garvex-v4-message.user{margin-left:auto;margin-right:0;padding:11px 14px;border-radius:18px 18px 6px 18px;background:#151517;border:1px solid rgba(255,255,255,.08)}
+.garvex-v4-message.assistant{margin-left:0;margin-right:auto;padding:4px 0;background:transparent;border:0}
+.garvex-v4-message .garvex-v4-role{font-size:9px;letter-spacing:.02em}.garvex-v4-message.user .garvex-v4-role{display:none}
+.garvex-v4-content{max-width:100%;font-size:13px;line-height:1.8;white-space:normal;overflow-wrap:anywhere}
+.garvex-v4-content p{margin:0 0 10px}.garvex-v4-content h1,.garvex-v4-content h2,.garvex-v4-content h3,.garvex-v4-content h4{margin:14px 0 7px;line-height:1.35;letter-spacing:-.02em}
+.garvex-v4-content h1{font-size:20px}.garvex-v4-content h2{font-size:18px}.garvex-v4-content h3{font-size:16px}.garvex-v4-content h4{font-size:14px}
+.garvex-v4-content ul,.garvex-v4-content ol{margin:8px 0 12px;padding-left:20px}.garvex-v4-content li{margin:4px 0}
+.garvex-v4-content code{padding:2px 5px;border-radius:6px;background:#141416;color:#ddd;font:11px ui-monospace,SFMono-Regular,Menlo,monospace}
+.garvex-v4-content pre{margin:10px 0;max-width:100%;overflow:auto;padding:12px;border-radius:10px;background:#08080a;border:1px solid rgba(255,255,255,.08)}.garvex-v4-content pre code{padding:0;background:transparent;color:#c9c9ce}
+.garvex-v4-content a{color:#9cc7ff;text-decoration:none}.garvex-v4-content a:hover{text-decoration:underline}
+
+/* Copy icon only. */
+.garvex-copy-btn{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;margin-top:2px;padding:0;border:0;border-radius:7px;background:transparent;color:#666;cursor:pointer;transition:background 140ms ease,color 140ms ease,transform 140ms ease}
+.garvex-copy-btn:hover{background:#151517;color:#bdbdc4;transform:translateY(-1px)}.garvex-copy-btn svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+
+/* Live Voice is portaled into the existing composer button row. */
+.garvex-live-voice.compact{position:static!important;width:auto!important;margin:0!important;padding:0!important;border:0!important;background:transparent!important;backdrop-filter:none!important}
+.garvex-live-voice.compact .garvex-live-voice-main{display:block}.garvex-live-voice.compact .garvex-live-voice-button{width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.1);border-radius:9px;background:#151517;color:#bcbcc2;transition:background 160ms ease,border-color 160ms ease,color 160ms ease,transform 160ms ease}
+.garvex-live-voice.compact .garvex-live-voice-button:hover{background:#1d1d20;border-color:rgba(255,255,255,.18);color:#fff;transform:translateY(-1px)}
+.garvex-live-voice.compact .garvex-live-voice-button svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.garvex-live-voice.compact .garvex-live-voice-pulse{position:absolute;width:5px;height:5px;margin:-11px 0 0 11px;border-radius:50%;background:#555}.garvex-live-voice.compact.is-active .garvex-live-voice-pulse{background:#52d273;box-shadow:0 0 9px rgba(82,210,115,.45);animation:garvexLivePulse 900ms ease-in-out infinite}
+.garvex-live-voice.compact .garvex-live-voice-status,.garvex-live-voice.compact .garvex-live-voice-live{display:none!important}@keyframes garvexLivePulse{0%,100%{transform:scale(.8);opacity:.65}50%{transform:scale(1.2);opacity:1}}
 .garvex-v4-input-row>button:first-of-type{display:none!important}
-/* Live Voice is presented inside the chat surface alongside the composer controls. */
-.garvex-live-voice{position:absolute;z-index:25;right:calc(50% - 430px);bottom:57px;margin:0;pointer-events:auto}
-.garvex-live-voice .garvex-live-voice-live{display:none}
-.garvex-live-voice-main{display:flex;align-items:center;gap:7px}
-.garvex-live-voice-button{height:32px;padding:0 11px;border:1px solid rgba(255,255,255,.12);border-radius:9px;background:#151517;color:#cfcfd3;font-size:10px;font-weight:600;cursor:pointer;white-space:nowrap}
-.garvex-live-voice-button:hover{background:#1b1b1e;border-color:rgba(255,255,255,.2)}
-.garvex-live-voice.is-active .garvex-live-voice-button{background:#202024;color:#fff;border-color:rgba(255,255,255,.2)}
-.garvex-live-voice-status{color:#666;font-size:9px;white-space:nowrap}
-.garvex-live-voice-pulse{width:7px;height:7px;display:inline-block;margin-right:5px;border-radius:50%;background:#777}
-.garvex-live-voice.is-active .garvex-live-voice-pulse{background:#3fb950;box-shadow:0 0 10px rgba(63,185,80,.45);animation:garvexLivePulse 1.1s ease-in-out infinite}
-@keyframes garvexLivePulse{0%,100%{transform:scale(.85);opacity:.7}50%{transform:scale(1.15);opacity:1}}
-/* Reader attachment button: visually integrated with the composer, not a floating banner. */
-.garvex-file-read-button{position:fixed;z-index:50;right:calc(max(8px, 5vw) + 76px);bottom:86px;width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.1);border-radius:9px;background:#151517;color:#bbb;font-size:0;box-shadow:none;cursor:pointer}
-.garvex-file-read-button::before{content:"⌕";font-size:15px}
-.garvex-file-read-button:disabled{opacity:.5;cursor:wait}
-.garvex-file-reader-card{max-width:min(760px,92vw)}
-.garvex-file-reader-result{white-space:pre-wrap;overflow-wrap:anywhere}
-@media (max-width:900px){
- .garvex-v4-orb-wrap{top:78px;width:150px;height:150px;min-height:150px}
- .garvex-v4-orb-wrap canvas{width:150px!important;height:150px!important}
- .garvex-v4-welcome{min-height:55vh;padding-top:120px}
- .garvex-live-voice{right:calc(50% - 380px);bottom:56px}
-}
-@media (max-width:560px){
- .vo-scroll-stage{gap:8px}
- .garvex-v4-orb-wrap{top:70px;width:132px;height:132px;min-height:132px}
- .garvex-v4-orb-wrap canvas{width:132px!important;height:132px!important}
- .garvex-v4-welcome{min-height:48vh;padding-top:100px}
- .garvex-v4-main{padding:12px 9px 174px}
- .garvex-live-voice{right:auto;left:8px;bottom:56px}
- .garvex-live-voice-status{display:none}
- .garvex-live-voice-button{height:30px;padding:0 9px}
- .garvex-file-read-button{right:50px;bottom:82px;width:30px;height:30px}
-}
+
+/* Visible safe progress stages instead of anonymous three dots. */
+.garvex-v4-thinking{display:grid!important;grid-template-columns:auto 1fr;gap:9px;align-items:center;padding:10px 0!important;min-width:min(420px,78vw)}
+.garvex-thinking-orb{width:26px;height:26px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#cce7ff 0 8%,#4d9eff 22%,#152e55 62%,transparent 70%);box-shadow:0 0 18px rgba(74,157,255,.25);animation:garvexThinkingPulse 1.2s ease-in-out infinite}
+.garvex-thinking-copy{display:flex;flex-direction:column;gap:2px}.garvex-thinking-copy strong{font-size:11px;color:#ddd}.garvex-thinking-copy span{font-size:9px;color:#666}.garvex-thinking-steps{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
+.garvex-thinking-steps span{padding:5px 7px;border:1px solid rgba(255,255,255,.06);border-radius:7px;color:#4f4f55;font-size:8px;transition:all 180ms ease}.garvex-thinking-steps span.active{color:#d7e9ff;border-color:rgba(85,165,255,.28);background:rgba(40,84,136,.16)}.garvex-thinking-steps span.done{color:#7d9bba;border-color:rgba(105,145,180,.14)}
+@keyframes garvexThinkingPulse{0%,100%{transform:scale(.92);opacity:.72}50%{transform:scale(1.06);opacity:1}}
+
+/* Overall smoothness. */
+.garvex-v4-composer,.garvex-v4-actions-grid button,.garvex-v4-icon,.garvex-v4-button{transition:background 160ms ease,border-color 160ms ease,transform 160ms ease,box-shadow 160ms ease}.garvex-v4-composer:focus-within{border-color:rgba(255,255,255,.22);box-shadow:0 14px 42px rgba(0,0,0,.38),0 0 0 1px rgba(255,255,255,.03) inset}
+.garvex-file-read-button{position:fixed;z-index:50;right:calc(max(8px,5vw) + 76px);bottom:86px;width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.1);border-radius:9px;background:#151517;color:#bbb;font-size:0;box-shadow:none;cursor:pointer}.garvex-file-read-button::before{content:"⌕";font-size:15px}.garvex-file-read-button:disabled{opacity:.5;cursor:wait}.garvex-file-reader-card{max-width:min(760px,92vw)}.garvex-file-reader-result{white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:900px){.garvex-v4-main{padding-top:16px}.garvex-v4-welcome{min-height:52vh}.garvex-v4-welcome .garvex-v4-orb-wrap{width:160px;height:160px}}
+@media(max-width:560px){.vo-scroll-stage{gap:8px}.garvex-v4-main{padding:12px 9px 174px}.garvex-v4-welcome{min-height:46vh}.garvex-v4-welcome .garvex-v4-orb-wrap{width:140px;height:140px}.garvex-copy-btn{width:24px;height:24px}.garvex-live-voice.compact .garvex-live-voice-button{width:30px;height:30px}.garvex-file-read-button{right:50px;bottom:82px;width:30px;height:30px}}
