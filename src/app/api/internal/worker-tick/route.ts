@@ -14,7 +14,7 @@ function authorized(request: Request) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-export async function POST(request: Request) {
+async function tick(request: Request) {
   if (!authorized(request)) return Response.json({ error: "Unauthorized" }, { status: 401 });
   try {
     await recoverStaleJobs();
@@ -28,3 +28,6 @@ export async function POST(request: Request) {
     return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }
+
+export async function GET(request: Request) { return tick(request); }
+export async function POST(request: Request) { return tick(request); }
