@@ -18,6 +18,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: main
+          fetch-depth: 0
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -37,4 +38,5 @@ jobs:
             exit 0
           fi
           git commit -m "fix: regenerate package-lock.json to match package.json"
-          git push origin main
+          git pull --rebase origin main
+          git push origin HEAD:main
