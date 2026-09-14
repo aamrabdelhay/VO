@@ -55,6 +55,25 @@ export function startWorkerLoop() {
   if (process.env.PLATFORM_RUNTIME_DRIVER !== "docker") { log.info("Worker loop not started; Vercel/serverless mode uses the cron worker tick endpoint", { service: "worker" }); return; }
   loopStarted = true; log.info("Worker loop starting", { workerId: WORKER_ID, service: "worker" });
   const tick = async () => { try { await drainQueue(3); } catch (error) { log.error("Worker tick failed", { error: String(error), service: "worker" }); } };
-  const schedule = async () => { try { await recoverStaleJobs(); const bucket = Math.floor(Date.now() / 60_000); await enqueue({ type: "reconcile", payload: {}, dedupeKey: `reconcile:${bucket}`, maxAttempts: 1 }); await enqueue({ type: "metrics-collect", payload: {}, dedupeKey: `metrics:${bucket}`, maxAttempts: 1 }); await enqueue({ type: "cleanup", payload: {}, dedupeKey: `cleanup:${Math.floor(Date.now() / (30 * 60_000))}`, maxAttempts: 1 }); } catch (error) { log.warn("Scheduler tick failed", { error: String(error), service: "worker" }); } };
+  const schedule = async () => {
+    try {
+      await recoverStaleJobs();
+      const bucket = Math.floor(Date.now() / 60_000);
+      await enqueue({ type: "reconcile", payload: {}, dedupeKey: `reconcile:${bucket}`, maxAttempts: 1 });
+      await enqueue({ type: "metrics-collect", payload: {}, dedupeKey: `metrics:${bucket}`, maxAttempts: 1 });
+      await enqueue({ type: "cleanup", payload: {}, dedupeKey: `cleanup:${Math.floor(Date.now() / (30 * 60_000))}`, maxAttempts: 1 });
+      if (process.env.SELF_PRACTICE_ENABLED === "1") {
+        const practiceBucket = Math.floor(Date.now() / (15 * 60_000));
+        await enqueue({
+          type: "self-practice",
+          queue: "self-practice",
+          payload: {},
+          dedupeKey: `self-practice:${practiceBucket}`,
+          maxAttempts: 1,
+          priority: 25,
+        });
+      }
+    } catch (error) { log.warn("Scheduler tick failed", { error: String(error), service: "worker" }); }
+  };
   setInterval(tick, 2000).unref?.(); setInterval(schedule, 60_000).unref?.(); setTimeout(schedule, 5000).unref?.();
 }
