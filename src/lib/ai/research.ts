@@ -25,9 +25,7 @@ export async function deepResearch(projectId: string, conversationId: string | n
     const result = await gateway.call("web_fetch", { url: candidate.url });
     if (!result.ok || typeof result.result !== "string") continue;
     fetched.push({ title: candidate.title ?? new URL(candidate.url).hostname, url: candidate.url, text: result.result });
-    if (conversationId) {
-      await db.insert(aiMessages).values({ conversationId, role: "tool", content: `[web_fetch] ${candidate.url}`, costCents: 1 });
-    }
+    if (conversationId) await db.insert(aiMessages).values({ conversationId, role: "tool", content: `[web_fetch] ${candidate.url}`, costCents: 1 });
     if (fetched.length >= 4) break;
   }
   if (!fetched.length) throw new Error("Research found no readable sources");
@@ -39,5 +37,7 @@ export async function deepResearch(projectId: string, conversationId: string | n
     { role: "user", content: `${prompt}\n\nWEB EVIDENCE:\n${evidence}` },
   ];
   const result = await queuedGarvexComplete(messages, { strategy: "single", timeoutMs: 15000 });
-  return { answer: result.text, provider: result.provider, model: result.model, sources: fetched.map(({ title, url }) => ({ title, url })) satisfies ResearchSource[] };
+  const sources = fetched.map(({ title, url }) => ({ title, url })) satisfies ResearchSource[];
+  const sourceList = sources.map((source, index) => `[Source ${index + 1} — ${source.title}](${source.url})`).join("\n");
+  return { answer: `${result.text}\n\n### Sources\n${sourceList}`, provider: result.provider, model: result.model, sources };
 }
