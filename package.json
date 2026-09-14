@@ -6,7 +6,7 @@
     "db:prepare:vercel": "node scripts/prepare-vercel-db.mjs",
     "db:push": "drizzle-kit push --config drizzle.config.ts --force",
     "prebuild": "npm run db:prepare:vercel",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
