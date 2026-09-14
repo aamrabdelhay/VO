@@ -14,7 +14,6 @@ type RecognitionLike = {
   onend: (() => void) | null;
   onerror: ((event: any) => void) | null;
 };
-
 type SpeechRecognitionCtor = new () => RecognitionLike;
 
 function getSpeechRecognition() {
@@ -30,6 +29,8 @@ export function GarvexLiveVoice({ csrf }: { csrf: string }) {
   const recognitionRef = useRef<RecognitionLike | null>(null);
   const activeRef = useRef(false);
   const speakingRef = useRef(false);
+  const thinkingRef = useRef(false);
+  const speechQueueRef = useRef<string[]>([]);
   const sentenceBufferRef = useRef("");
   const historyRef = useRef<LiveMessage[]>([]);
 
@@ -37,35 +38,55 @@ export function GarvexLiveVoice({ csrf }: { csrf: string }) {
     return () => {
       activeRef.current = false;
       recognitionRef.current?.stop();
+      speechQueueRef.current = [];
       window.speechSynthesis?.cancel();
     };
   }, []);
 
-  const speak = (text: string) => {
-    const clean = text.trim();
-    if (!clean || !window.speechSynthesis) return;
-    const utterance = new SpeechSynthesisUtterance(clean);
-    utterance.lang = /[\u0600-\u06ff]/.test(clean) ? "ar-EG" : "en-US";
+  const speakNext = () => {
+    if (!window.speechSynthesis || speakingRef.current) return;
+    const next = speechQueueRef.current.shift()?.trim();
+    if (!next) {
+      if (activeRef.current && !thinkingRef.current) {
+        setStatus("listening");
+        try { recognitionRef.current?.start(); } catch {}
+      } else if (!activeRef.current) {
+        setStatus("off");
+      }
+      return;
+    }
+    const utterance = new SpeechSynthesisUtterance(next);
+    utterance.lang = /[\u0600-\u06ff]/.test(next) ? "ar-EG" : "en-US";
     utterance.rate = 1.05;
     utterance.pitch = 1;
     speakingRef.current = true;
     setStatus("speaking");
     utterance.onend = () => {
       speakingRef.current = false;
-      if (activeRef.current) {
-        setStatus("listening");
-        try { recognitionRef.current?.start(); } catch {}
-      } else {
-        setStatus("off");
-      }
+      speakNext();
+    };
+    utterance.onerror = () => {
+      speakingRef.current = false;
+      speakNext();
     };
     window.speechSynthesis.speak(utterance);
   };
 
+  const queueSpeech = (text: string) => {
+    const clean = text.trim();
+    if (!clean || !window.speechSynthesis) return;
+    speechQueueRef.current.push(clean);
+    speakNext();
+  };
+
   const streamReply = async (text: string) => {
+    thinkingRef.current = true;
     setStatus("thinking");
     setResponse("");
     sentenceBufferRef.current = "";
+    speechQueueRef.current = [];
+    window.speechSynthesis?.cancel();
+    speakingRef.current = false;
     recognitionRef.current?.stop();
     const res = await fetch("/api/v1/admin/garvex/live", {
       method: "POST",
@@ -91,21 +112,24 @@ export function GarvexLiveVoice({ csrf }: { csrf: string }) {
           full += payload.text;
           sentenceBufferRef.current += payload.text;
           setResponse(full);
-          const sentence = sentenceBufferRef.current.match(/^([\s\S]*?[.!?。！？\n])\s*/);
-          if (sentence) {
-            sentenceBufferRef.current = sentenceBufferRef.current.slice(sentence[0].length);
-            if (!speakingRef.current) speak(sentence[1]);
+          let match = sentenceBufferRef.current.match(/^([\s\S]*?[.!?。！？\n])\s*/);
+          while (match) {
+            const sentence = match[1];
+            sentenceBufferRef.current = sentenceBufferRef.current.slice(match[0].length);
+            queueSpeech(sentence);
+            match = sentenceBufferRef.current.match(/^([\s\S]*?[.!?。！？\n])\s*/);
           }
         }
         if (payload.type === "error") throw new Error(payload.error ?? "Live voice failed");
       }
     }
     historyRef.current = [...historyRef.current, { role: "user", content: text }, { role: "assistant", content: full }].slice(-12);
+    thinkingRef.current = false;
     if (sentenceBufferRef.current.trim()) {
-      const tail = sentenceBufferRef.current;
+      queueSpeech(sentenceBufferRef.current);
       sentenceBufferRef.current = "";
-      if (!speakingRef.current) speak(tail);
-    } else if (activeRef.current && !speakingRef.current) {
+    }
+    if (!speakingRef.current && speechQueueRef.current.length === 0 && activeRef.current) {
       setStatus("listening");
       try { recognitionRef.current?.start(); } catch {}
     }
@@ -113,8 +137,10 @@ export function GarvexLiveVoice({ csrf }: { csrf: string }) {
 
   const stop = () => {
     activeRef.current = false;
+    thinkingRef.current = false;
     setActive(false);
     recognitionRef.current?.stop();
+    speechQueueRef.current = [];
     window.speechSynthesis?.cancel();
     speakingRef.current = false;
     setStatus("off");
@@ -128,6 +154,7 @@ export function GarvexLiveVoice({ csrf }: { csrf: string }) {
     }
     activeRef.current = true;
     setActive(true);
+    thinkingRef.current = false;
     setStatus("listening");
     const recognition = new Ctor();
     recognition.continuous = true;
@@ -144,18 +171,22 @@ export function GarvexLiveVoice({ csrf }: { csrf: string }) {
       setTranscript(`${finalText}${interim}`.trim());
       if (finalText.trim()) {
         void streamReply(finalText.trim()).catch((error) => {
+          thinkingRef.current = false;
           setResponse(error instanceof Error ? error.message : String(error));
-          if (activeRef.current) setStatus("listening");
+          if (activeRef.current) {
+            setStatus("listening");
+            try { recognitionRef.current?.start(); } catch {}
+          }
         });
       }
     };
     recognition.onend = () => {
-      if (activeRef.current && !speakingRef.current && status !== "thinking") {
+      if (activeRef.current && !thinkingRef.current && !speakingRef.current) {
         try { recognition.start(); } catch {}
       }
     };
     recognition.onerror = () => {
-      if (activeRef.current) setStatus("listening");
+      if (activeRef.current && !thinkingRef.current && !speakingRef.current) setStatus("listening");
     };
     recognitionRef.current = recognition;
     try { recognition.start(); } catch {}
