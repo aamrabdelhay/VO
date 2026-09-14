@@ -23,41 +23,21 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Repair transformer syntax from the checked-in source
+      - name: Repair transformer template nesting before execution
         run: |
           python3 - <<'PY'
           from pathlib import Path
           p = Path('scripts/apply-self-practice.mjs')
           s = p.read_text()
-          start = s.index('const ollamaClass = `')
-          end = s.index('`;\nawait write("src/lib/ai/provider.ts"', start) + 2
-          replacement = '''const ollamaClass = [
-            'class OllamaProvider implements AIProvider {',
-            '  readonly name = "ollama";',
-            '  async complete(messages: ChatMessage[], opts: ProviderOptions) {',
-            '    const base = (opts.baseUrl ?? process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434").replace(/\\/$/, "");',
-            '    const headers: Record<string, string> = { "content-type": "application/json" };',
-            '    if (opts.apiKey) headers.authorization = "Bearer " + opts.apiKey;',
-            '    const res = await fetch(base + "/api/chat", {',
-            '      method: "POST",',
-            '      headers,',
-            '      body: JSON.stringify({',
-            '        model: opts.model,',
-            '        stream: false,',
-            '        messages: messages.map((m) => ({ role: m.role, content: textContent(m.content) })),',
-            '        options: { temperature: opts.temperature, num_predict: opts.maxTokens },',
-            '      }),',
-            '    });',
-            '    if (!res.ok) throw new Error("Ollama request failed (" + res.status + "): " + await res.text());',
-            '    const data = await res.json();',
-            '    const tokensIn = data.prompt_eval_count ?? 0;',
-            '    const tokensOut = data.eval_count ?? 0;',
-            '    return { text: data.message?.content ?? "", tokensIn, tokensOut, costCents: 0, provider: this.name, model: opts.model };',
-            '  }',
-            '}',
-            '',
-          ].join("\\n");'''
-          p.write_text(s[:start] + replacement + s[end:])
+          start = s.index('const selfPractice = `')
+          end = s.index('`;\nawait write("src/lib/ai/self-practice.ts"', start)
+          block = s[start:end]
+          first = block.find('`')
+          body = block[first + 1:]
+          body = body.replace('`', '\\`')
+          s = s[:first + 1 + start] if False else s
+          s = s[:start] + block[:first + 1] + body + s[end:]
+          p.write_text(s)
           PY
       - run: node --check scripts/apply-self-practice.mjs
       - run: node scripts/apply-self-practice.mjs
