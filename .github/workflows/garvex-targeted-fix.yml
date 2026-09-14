@@ -1,0 +1,63 @@
+name: Garvex targeted fix
+on:
+  push:
+    paths: [.github/garvex-fix-request.txt]
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply targeted fixes
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          def edit(path, fn):
+              p = Path(path); s = p.read_text(); n = fn(s)
+              if n == s: print(f"NO CHANGE {path}")
+              else: p.write_text(n); print(f"CHANGED {path}")
+
+          edit('src/lib/ai/agent.ts', lambda s: s.replace('spentTodayCents, type ChatMessage', 'spentTodayCents, textContent, type ChatMessage').replace('content: message.content.slice(0, 20000),', 'content: textContent(message.content).slice(0, 20000),'))
+          edit('src/lib/ai/gateway.ts', lambda s: s.replace('import { redact } from "@/lib/crypto";', 'import { redact } from "@/lib/crypto";\nimport { resolveWorkspacePath } from "@/lib/ai/workspace-path";').replace('const full = path.resolve(this.ctx.workspace, relative);\n    if (!full.startsWith(path.resolve(this.ctx.workspace))) {\n      throw new ToolDenied("Path escapes the isolated workspace");\n    }\n    return full;', 'try { return resolveWorkspacePath(this.ctx.workspace, relative); } catch { throw new ToolDenied("Path escapes the isolated workspace"); }'))
+          edit('src/app/(app)/projects/[projectId]/settings/page.tsx', lambda s: s.replace("This is the project's stable free production URL.", "This is the project&apos;s stable free production URL."))
+          edit('src/components/garvex-live-voice.tsx', lambda s: s.replace('const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);', '').replace('  useEffect(() => {\n    if (compact) setPortalTarget(document.querySelector(".garvex-v4-input-row"));\n    else setPortalTarget(null);\n  }, [compact]);\n\n', '').replace('if (compact) return portalTarget ? createPortal(control, portalTarget) : null;', 'if (compact) { const portalTarget = typeof document === "undefined" ? null : document.querySelector<HTMLElement>(".garvex-v4-input-row"); return portalTarget ? createPortal(control, portalTarget) : null; }'))
+
+          def chat_patch(s):
+              if 'MessageResponse' not in s:
+                  s = s.replace('import { FormEvent, useEffect, useMemo, useRef, useState } from "react";', 'import { FormEvent, useEffect, useMemo, useRef, useState } from "react";\nimport { MessageResponse } from "@/components/ai-elements/message";')
+              s = s.replace('provider?: string; model?: string };', 'provider?: string; model?: string; stage?: string };')
+              s = s.replace('<div className="garvex-v4-content">{message.content}</div>', '<div className="garvex-v4-content"><MessageResponse isAnimating={busy && message.role === "assistant"}>{message.content}</MessageResponse></div>')
+              s = s.replace('const chunksRef = useRef<Blob[]>([]);', 'const chunksRef = useRef<Blob[]>([]);\n  const abortRef = useRef<AbortController | null>(null);')
+              s = s.replace('  const streamChat = async (text: string) => {\n    const task', '  const streamChat = async (text: string) => {\n    const controller = new AbortController();\n    abortRef.current = controller;\n    const task')
+              s = s.replace('body: JSON.stringify({ prompt: text, history:', 'signal: controller.signal, body: JSON.stringify({ prompt: text, history:')
+              s = s.replace('    } catch (caught) { const message', '    } catch (caught) { const message')
+              s = s.replace('    } finally { setBusy(false); requestAnimationFrame', '    } finally { abortRef.current = null; setBusy(false); requestAnimationFrame')
+              s = s.replace('<button className="send" type="submit" disabled={!prompt.trim() || busy}>{busy ? "…" : "↑"}</button>', '<button type="button" className="send" disabled={!busy} onClick={() => abortRef.current?.abort()}>■</button><button className="send" type="submit" disabled={!prompt.trim() || busy}>{busy ? "…" : "↑"}</button>')
+              s = s.replace('useEffect(() => { if (!projects.some', 'useEffect(() => { const onKey = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); newChat(); } if (event.key === "Escape" && busy) abortRef.current?.abort(); }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [busy]);\n  useEffect(() => { if (!projects.some')
+              return s
+          edit('src/components/garvex-chat-v4.tsx', chat_patch)
+          PY
+      - name: Install
+        run: npm ci
+      - name: TypeScript
+        run: npx tsc --noEmit
+      - name: ESLint
+        run: npx eslint .
+      - name: Build
+        run: npm run build
+      - name: Commit validated fixes
+        run: |
+          rm -f .github/garvex-fix-request.txt
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add src .github/garvex-fix-request.txt
+          git commit -m "fix: resolve Garvex type, lint and workspace safety issues" || exit 0
+          git push origin main
