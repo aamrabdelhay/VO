@@ -5,6 +5,7 @@ import { deployments, projects } from "@/db/schema";
 import { runAllCleanup } from "@/lib/cleanup";
 import { drainDeployment, expirePreview, monitorAfterPromotion, runDeploymentPipeline } from "@/lib/deploy";
 import { diagnoseDeployment, runFixLoop } from "@/lib/ai/agent";
+import { runSelfPracticeJob } from "@/lib/ai/self-practice";
 import { executeGarvexJob } from "@/lib/ai/garvex-queue";
 import { log } from "@/lib/logger";
 import { claimNextJob, completeJob, enqueue, failJob, recoverStaleJobs, type JobRecord } from "@/lib/queue";
@@ -33,7 +34,9 @@ export const handlers: Record<string, Handler> = {
   "webhook-process": async (payload) => processWebhook(String(payload.deliveryId)),
   cleanup: async () => runAllCleanup(), reconcile: async () => reconcile(), "metrics-collect": async () => collectMetrics(),
   "domain-verify": async (payload) => verifyDomain(String(payload.domainId)), "ai-diagnose": async (payload) => diagnoseDeployment(String(payload.deploymentId), "system"),
-  "ai-fix": async (payload) => runFixLoop(String(payload.deploymentId), String(payload.actor ?? "system")), "ai-garvex": async (_payload, job) => executeGarvexJob(job), "health-check": async () => reconcile(),
+  "ai-fix": async (payload) => runFixLoop(String(payload.deploymentId), String(payload.actor ?? "system")),
+  "self-practice": async (payload) => runSelfPracticeJob(payload),
+  "ai-garvex": async (_payload, job) => executeGarvexJob(job), "health-check": async () => reconcile(),
 };
 
 export async function runOneJob(): Promise<boolean> {
