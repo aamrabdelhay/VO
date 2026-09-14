@@ -87,7 +87,7 @@ export async function POST(request: Request) {
       const clean = text.trim();
       if (!clean) return;
       const job = nvidiaTts(clean, nvidiaKey).then((audio) => {
-        controller.enqueue(encoder.encode(event({ type: "audio", audio, sequence })));
+        controller.enqueue(encoder.encode(event({ type: "audio", audio, sequence, text: clean })));
       }).catch(() => undefined);
       audioPromises.push(job);
     };
