@@ -30,17 +30,16 @@ jobs:
           import json
           p = Path('scripts/apply-self-practice.mjs')
           s = p.read_text()
-          def canonicalize(prefix, end_marker):
-              nonlocal s
-              start = s.index(prefix)
+          def canonicalize(text, prefix, end_marker):
+              start = text.index(prefix)
               body_start = start + len(prefix)
-              if s[body_start] != '`':
-                  return
-              end = s.index(end_marker, body_start + 1)
-              body = s[body_start + 1:end]
-              s = s[:start] + prefix[:-1] + json.dumps(body) + s[end:]
-          canonicalize('const ollamaClass = `', '`;\nawait write("src/lib/ai/provider.ts"')
-          canonicalize('const selfPractice = `', '`;\nawait write("src/lib/ai/self-practice.ts"')
+              if text[body_start] != '`':
+                  return text
+              end = text.index(end_marker, body_start + 1)
+              body = text[body_start + 1:end]
+              return text[:start] + prefix[:-1] + json.dumps(body) + text[end:]
+          s = canonicalize(s, 'const ollamaClass = `', '`;\nawait write("src/lib/ai/provider.ts"')
+          s = canonicalize(s, 'const selfPractice = `', '`;\nawait write("src/lib/ai/self-practice.ts"')
           p.write_text(s)
           PY
       - run: node --check scripts/apply-self-practice.mjs
