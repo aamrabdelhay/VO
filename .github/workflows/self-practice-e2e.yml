@@ -40,6 +40,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Install TypeScript runner
+        run: npm install --no-save --ignore-scripts tsx@latest
       - name: Install Ollama
         run: curl -fsSL https://ollama.com/install.sh | sh
       - name: Start Ollama
