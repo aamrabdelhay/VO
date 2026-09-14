@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,33 +17,6 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Apply pending feature migrations
-        run: |
-          if [ -f scripts/apply-garvex-features.mjs ]; then node scripts/apply-garvex-features.mjs; fi
-          if [ -f scripts/apply-garvex-request-context.mjs ]; then node scripts/apply-garvex-request-context.mjs; fi
-          if [ -f scripts/apply-self-practice.mjs ]; then node --check scripts/apply-self-practice.mjs; fi
-          if [ -f scripts/apply-self-practice.mjs ]; then node - <<'NODE'
-          const fs = require('node:fs');
-          const p = 'scripts/apply-self-practice.mjs';
-          let s = fs.readFileSync(p, 'utf8');
-          const old = 'if (!queue.includes(\'| "self-practice"\')) await write("src/lib/queue.ts", once(queue, \'  | "domain-verify";\', \'  | "domain-verify"\\n  | "self-practice";\', "queue.ts"));';
-          const neu = 'if (!queue.includes(\'| "self-practice"\')) { const anchor = \'  | "domain-verify";\'; queue = anchor in queue ? once(queue, anchor, \'  | "domain-verify"\\n  | "self-practice";\', "queue.ts") : queue.replace(/\\nexport type JobRecord/, \'\\n  | "self-practice";\\n\\nexport type JobRecord\'); await write("src/lib/queue.ts", queue); }';
-          if (s.includes(old)) s = s.replace(old, neu);
-          fs.writeFileSync(p, s);
-          NODE
-          node --check scripts/apply-self-practice.mjs && node scripts/apply-self-practice.mjs; fi
-          rm -f scripts/apply-garvex-features.mjs scripts/apply-garvex-request-context.mjs scripts/feature-memory-web.mjs .vo-feature-memory-web
-      - name: TypeScript
-        run: npx tsc --noEmit
-      - name: ESLint
-        run: npx eslint .
-      - name: Build
-        run: npm run build
-      - name: Commit applied feature changes
-        run: |
-          if git diff --quiet; then exit 0; fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "feat: add self-supervised code repair loop"
-          git push
+      - run: npx tsc --noEmit
+      - run: npx eslint .
+      - run: npm run build
