@@ -10,6 +10,7 @@ import {
   index,
   pgEnum,
   doublePrecision,
+  customType,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -20,6 +21,12 @@ const id = () =>
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
+
+const vector1536 = customType<{ data: number[]; driverData: string }>({
+  dataType: () => "vector(1536)",
+  toDriver: (value) => `[${value.join(",")}]`,
+  fromDriver: (value) => String(value).slice(1, -1).split(",").filter(Boolean).map(Number),
+});
 
 /* ------------------------------------------------------------------ enums */
 
@@ -161,7 +168,6 @@ export const githubInstallations = pgTable(
     installationId: text("installation_id").notNull(),
     accountLogin: text("account_login").notNull(),
     accountType: text("account_type").notNull().default("User"),
-    // Personal access token (encrypted) used when no GitHub App is configured.
     tokenCipher: jsonb("token_cipher"),
     createdAt: createdAt(),
   },
@@ -221,8 +227,6 @@ export const projects = pgTable(
     productionBranch: text("production_branch").notNull().default("main"),
     enabled: boolean("enabled").notNull().default(true),
     previewsEnabled: boolean("previews_enabled").notNull().default(true),
-
-    // desired vs observed state
     desiredCommitSha: text("desired_commit_sha"),
     desiredDeploymentId: text("desired_deployment_id"),
     currentHealthyDeploymentId: text("current_healthy_deployment_id"),
@@ -230,8 +234,6 @@ export const projects = pgTable(
     lastFailedCommitSha: text("last_failed_commit_sha"),
     deploymentGeneration: integer("deployment_generation").notNull().default(0),
     deploymentCounter: integer("deployment_counter").notNull().default(0),
-
-    // build configuration
     rootDirectory: text("root_directory").notNull().default("."),
     packageManager: text("package_manager"),
     installCommand: text("install_command"),
@@ -243,8 +245,6 @@ export const projects = pgTable(
     nodeVersion: text("node_version").notNull().default("22"),
     runtimePort: integer("runtime_port").notNull().default(3000),
     configVersion: integer("config_version").notNull().default(1),
-
-    // health check policy
     healthPath: text("health_path").notNull().default("/"),
     healthExpectedStatus: integer("health_expected_status").notNull().default(200),
     healthTimeoutMs: integer("health_timeout_ms").notNull().default(5000),
@@ -253,25 +253,18 @@ export const projects = pgTable(
     healthRetries: integer("health_retries").notNull().default(20),
     postPromotionWindowMs: integer("post_promotion_window_ms").notNull().default(120000),
     autoRollback: boolean("auto_rollback").notNull().default(true),
-
-    // resource limits
     memoryLimitMb: integer("memory_limit_mb").notNull().default(512),
     cpuLimit: doublePrecision("cpu_limit").notNull().default(1),
     pidsLimit: integer("pids_limit").notNull().default(256),
     buildTimeoutMs: integer("build_timeout_ms").notNull().default(15 * 60 * 1000),
-
-    // retention policy
     retainProductionDeployments: integer("retain_production_deployments").notNull().default(10),
     previewRetentionDays: integer("preview_retention_days").notNull().default(7),
     cacheRetentionDays: integer("cache_retention_days").notNull().default(30),
     logRetentionDays: integer("log_retention_days").notNull().default(90),
-
-    // ai policy
     aiPermission: aiPermissionEnum("ai_permission").notNull().default("READ_ONLY"),
     aiAutoDiagnose: boolean("ai_auto_diagnose").notNull().default(true),
     aiMaxFixAttempts: integer("ai_max_fix_attempts").notNull().default(3),
     aiDailyBudgetCents: integer("ai_daily_budget_cents").notNull().default(200),
-
     webhookSecretCipher: jsonb("webhook_secret_cipher"),
     createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
@@ -309,28 +302,24 @@ export const deployments = pgTable(
     target: deploymentTargetEnum("target").notNull().default("PRODUCTION"),
     status: deploymentStatusEnum("status").notNull().default("QUEUED"),
     generation: integer("generation").notNull().default(0),
-
     branch: text("branch").notNull(),
     commitSha: text("commit_sha").notNull(),
     commitMessage: text("commit_message"),
     commitAuthor: text("commit_author"),
     commitTimestamp: timestamp("commit_timestamp", { withTimezone: true }),
     prNumber: integer("pr_number"),
-
     artifactRef: text("artifact_ref"),
     imageRef: text("image_ref"),
     runtimeDriver: text("runtime_driver"),
     hostId: text("host_id").notNull().default("local"),
     port: integer("port"),
     url: text("url"),
-
     triggeredBy: text("triggered_by").notNull().default("system"),
     triggerSource: text("trigger_source").notNull().default("manual"),
     correlationId: text("correlation_id"),
     configSnapshot: jsonb("config_snapshot"),
     errorReason: text("error_reason"),
     aiFixOfDeploymentId: text("ai_fix_of_deployment_id"),
-
     queuedAt: createdAt(),
     buildStartedAt: timestamp("build_started_at", { withTimezone: true }),
     buildEndedAt: timestamp("build_ended_at", { withTimezone: true }),
@@ -364,7 +353,6 @@ export const deploymentEvents = pgTable(
   (t) => [index("deployment_events_idx").on(t.deploymentId, t.createdAt)],
 );
 
-// Bounded live log tail. Durable full logs live in object storage.
 export const deploymentLogChunks = pgTable(
   "deployment_log_chunks",
   {
@@ -397,9 +385,8 @@ export const deploymentArtifacts = pgTable(
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
-  (t) => [
-    uniqueIndex("artifact_key_uq").on(t.storageKey),
-    index("artifact_project_idx").on(t.projectId, t.type),
+  [
+    uniqueIndex("artifact_key_uq").on(/** @type {any} */ (undefined as any).storageKey),
   ],
 );
 
@@ -441,8 +428,6 @@ export const hosts = pgTable(
   },
 );
 
-/* ------------------------------------------------------------ health / metrics */
-
 export const healthCheckResults = pgTable(
   "health_check_results",
   {
@@ -461,7 +446,6 @@ export const healthCheckResults = pgTable(
   (t) => [index("health_result_idx").on(t.deploymentId, t.checkedAt)],
 );
 
-// Aggregated (low frequency) metric roll-ups only. High frequency samples belong in Prometheus.
 export const resourceMetrics = pgTable(
   "resource_metrics",
   {
@@ -480,8 +464,6 @@ export const resourceMetrics = pgTable(
   (t) => [index("metrics_idx").on(t.projectId, t.recordedAt)],
 );
 
-/* ---------------------------------------------------------------- domains */
-
 export const domains = pgTable(
   "domains",
   {
@@ -490,7 +472,7 @@ export const domains = pgTable(
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
     domain: text("domain").notNull(),
-    kind: text("kind").notNull().default("custom"), // platform | custom | preview
+    kind: text("kind").notNull().default("custom"),
     status: domainStatusEnum("status").notNull().default("PENDING"),
     verificationToken: text("verification_token"),
     verificationMethod: text("verification_method").notNull().default("CNAME"),
@@ -504,8 +486,6 @@ export const domains = pgTable(
   },
   (t) => [uniqueIndex("domain_uq").on(t.domain), index("domain_project_idx").on(t.projectId)],
 );
-
-/* ----------------------------------------------------------------- env vars */
 
 export const envVars = pgTable(
   "env_vars",
@@ -536,8 +516,6 @@ export const secretVersions = pgTable("secret_versions", {
   createdBy: text("created_by"),
   createdAt: createdAt(),
 });
-
-/* --------------------------------------------------------------------- ai */
 
 export const aiConfigs = pgTable(
   "ai_configs",
@@ -571,6 +549,25 @@ export const aiConversations = pgTable("ai_conversations", {
   createdBy: text("created_by"),
   createdAt: createdAt(),
 });
+
+export const garvexMemories = pgTable(
+  "garvex_memories",
+  {
+    id: id(),
+    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
+    content: text("content").notNull(),
+    embedding: vector1536("embedding").notNull(),
+    sourceConversationId: text("source_conversation_id").references(() => aiConversations.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    useCount: integer("use_count").notNull().default(0),
+  },
+  (t) => [
+    index("garvex_memories_scope_idx").on(t.orgId, t.projectId),
+    index("garvex_memories_last_used_idx").on(t.lastUsedAt),
+  ],
+);
 
 export const aiMessages = pgTable(
   "ai_messages",
@@ -611,7 +608,7 @@ export const aiActions = pgTable("ai_actions", {
     .references(() => projects.id, { onDelete: "cascade" }),
   deploymentId: text("deployment_id"),
   conversationId: text("conversation_id"),
-  kind: text("kind").notNull(), // DIAGNOSIS | FIX | ROLLBACK_SUGGESTION
+  kind: text("kind").notNull(),
   status: text("status").notNull().default("running"),
   provider: text("provider"),
   model: text("model"),
@@ -643,8 +640,6 @@ export const aiFixAttempts = pgTable("ai_fix_attempts", {
   createdAt: createdAt(),
   finishedAt: timestamp("finished_at", { withTimezone: true }),
 });
-
-/* ------------------------------------------------------------- operations */
 
 export const jobs = pgTable(
   "jobs",
