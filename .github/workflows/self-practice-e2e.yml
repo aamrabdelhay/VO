@@ -1,0 +1,53 @@
+name: Self-practice E2E
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/lib/ai/self-practice.ts"
+      - "src/lib/ai/provider.ts"
+      - "src/lib/queue.ts"
+      - "src/lib/worker.ts"
+      - "scripts/self-practice-e2e.ts"
+      - ".github/workflows/self-practice-e2e.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: self-practice-e2e
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PLATFORM_ENCRYPTION_KEY: ${{ secrets.PLATFORM_ENCRYPTION_KEY }}
+      SELF_PRACTICE_ENABLED: "1"
+      SELF_PRACTICE_DAILY_LIMIT: "2"
+      SELF_PRACTICE_MAX_CONCURRENT: "1"
+      OLLAMA_BASE_URL: "http://127.0.0.1:11434"
+      OLLAMA_MODEL: "qwen2.5:3b"
+      NODE_ENV: "production"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+      - name: Start Ollama
+        run: |
+          ollama serve > /tmp/ollama.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:11434/api/tags >/dev/null && break; sleep 2; done
+          curl -sf http://127.0.0.1:11434/api/tags >/dev/null
+      - name: Pull local repair model
+        run: ollama pull "${OLLAMA_MODEL}"
+      - name: Self-practice E2E
+        run: npx --no-install tsx scripts/self-practice-e2e.ts
