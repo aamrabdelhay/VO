@@ -47,6 +47,22 @@ try {
     );
   `);
   await client.query(`CREATE INDEX IF NOT EXISTS self_practice_verified_idx ON self_practice_examples(verified, created_at)`);
+  await client.query(`CREATE EXTENSION IF NOT EXISTS vector`);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS garvex_memories (
+      id text PRIMARY KEY,
+      org_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      project_id text REFERENCES projects(id) ON DELETE CASCADE,
+      content text NOT NULL,
+      embedding vector(1536) NOT NULL,
+      source_conversation_id text REFERENCES ai_conversations(id) ON DELETE SET NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      last_used_at timestamptz,
+      use_count integer NOT NULL DEFAULT 0
+    );
+  `);
+  await client.query(`CREATE INDEX IF NOT EXISTS garvex_memories_scope_idx ON garvex_memories(org_id, project_id)`);
+  await client.query(`CREATE INDEX IF NOT EXISTS garvex_memories_last_used_idx ON garvex_memories(last_used_at)`);
   await client.query("COMMIT");
 } catch (error) {
   await client.query("ROLLBACK").catch(() => {});
