@@ -10,7 +10,8 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "verify:all": "npx tsc --noEmit && npx eslint . && npm run build"
+    "verify:all": "npx tsc --noEmit && npx eslint . && npm run build",
+    "verify:ci": "npm run verify:all"
   },
   "dependencies": {
     "dotenv": "17.3.1",
