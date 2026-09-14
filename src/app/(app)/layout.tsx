@@ -4,26 +4,20 @@ import { redirect } from "next/navigation";
 import { desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { notifications, projects } from "@/db/schema";
-import { getSessionUser, primaryOrg } from "@/lib/auth";
+import { AUTH_DISABLED, getSessionUser, primaryOrg } from "@/lib/auth";
 import "../motion.css";
 import "../garvex-v3.css";
 import "../garvex-modern.css";
 import "../vo-navigation.css";
 
 export const dynamic = "force-dynamic";
-
 const NAV = [
-  { href: "/admin/garvex", label: "Garvex" },
-  { href: "/dashboard", label: "Overview" },
-  { href: "/projects", label: "Projects" },
-  { href: "/storage", label: "Storage" },
-  { href: "/admin", label: "Administration" },
-  { href: "/admin/settings", label: "Settings" },
+  { href: "/admin/garvex", label: "Garvex" }, { href: "/dashboard", label: "Overview" }, { href: "/projects", label: "Projects" },
+  { href: "/storage", label: "Storage" }, { href: "/admin", label: "Administration" }, { href: "/admin/settings", label: "Settings" },
 ];
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
-  const user = await getSessionUser();
-  if (!user) redirect("/login");
+  const user = await getSessionUser(); if (!user) redirect("/login");
   const membership = await primaryOrg(user.id);
   const projectList = membership ? await db.select({ id: projects.id, name: projects.name, slug: projects.slug }).from(projects).where(eq(projects.orgId, membership.org.id)).orderBy(desc(projects.updatedAt)).limit(12) : [];
   const alerts = membership ? await db.select().from(notifications).where(eq(notifications.orgId, membership.org.id)).orderBy(desc(notifications.createdAt)).limit(5) : [];
@@ -42,6 +36,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       </aside>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="vo-mobile-nav flex items-center gap-4 border-b px-5 py-2.5"><Link href="/admin/garvex" className="text-[12.5px] font-semibold">Garvex</Link><Link href="/projects" className="nav-link">Projects</Link><Link href="/dashboard" className="nav-link">Overview</Link><Link href="/admin" className="nav-link">Admin</Link><Link href="/admin/settings" className="nav-link">Settings</Link></header>
+        {AUTH_DISABLED ? <div role="alert" className="border-b border-red-500/40 bg-red-500/15 px-5 py-2 text-[12px] font-semibold text-red-200">⚠ AUTHENTICATION DISABLED — this deployment is running in explicit no-login preview mode. Re-enable authentication before exposing it publicly.</div> : null}
         {alerts.some((a) => a.severity === "error") ? <div className="border-b px-5 py-2 text-[11.5px]" style={{ background: "rgba(248,81,73,0.07)", color: "#ffb4ae" }}>{alerts.find((a) => a.severity === "error")?.title}</div> : null}
         <main className="min-h-0 min-w-0 flex-1 overflow-hidden px-5 py-5 vo-scroll-stage">{children}</main>
       </div>
