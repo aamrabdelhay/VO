@@ -6,8 +6,9 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 function authorized(request: Request) {
-  const expected = process.env.WORKER_TICK_SECRET;
-  const provided = request.headers.get("x-worker-tick-secret");
+  const expected = process.env.WORKER_TICK_SECRET ?? process.env.CRON_SECRET;
+  const authorization = request.headers.get("authorization");
+  const provided = request.headers.get("x-worker-tick-secret") ?? (authorization?.startsWith("Bearer ") ? authorization.slice(7) : null);
   if (!expected || !provided) return false;
   const a = Buffer.from(expected); const b = Buffer.from(provided);
   return a.length === b.length && timingSafeEqual(a, b);
