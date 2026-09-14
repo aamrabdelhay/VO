@@ -16,7 +16,8 @@ export type JobType =
   | "ai-fix"
   | "ai-garvex"
   | "metrics-collect"
-  | "domain-verify";
+  | "domain-verify"
+  | "self-practice";
 
 export type JobRecord = typeof jobs.$inferSelect;
 
