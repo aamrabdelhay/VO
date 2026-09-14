@@ -18,7 +18,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: node scripts/feature-memory-web.mjs
+      - run: node scripts/apply-garvex-features.mjs
+      - run: node scripts/apply-garvex-request-context.mjs
+      - run: rm -f scripts/apply-garvex-features.mjs scripts/apply-garvex-request-context.mjs scripts/feature-memory-web.mjs .vo-feature-memory-web
       - run: npx tsc --noEmit
       - run: npx eslint .
       - run: npm run build
