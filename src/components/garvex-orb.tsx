@@ -85,8 +85,8 @@ export function GarvexOrb({ size = 220 }: { size?: number }) {
     }
     gl.useProgram(program);
 
-    const latSegments = 40;
-    const lonSegments = 64;
+    const latSegments = 72;
+    const lonSegments = 112;
     const positions: number[] = [];
     const normals: number[] = [];
     const indices: number[] = [];
@@ -147,14 +147,9 @@ export function GarvexOrb({ size = 220 }: { size?: number }) {
       for (let c = 0; c < 4; c += 1) for (let r = 0; r < 4; r += 1) out[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
       return out;
     };
-    const rotateY = (angle: number) => {
-      const c = Math.cos(angle), s = Math.sin(angle);
-      return new Float32Array([c,0,-s,0, 0,1,0,0, s,0,c,0, 0,0,0,1]);
-    };
-    const rotateX = (angle: number) => {
-      const c = Math.cos(angle), s = Math.sin(angle);
-      return new Float32Array([1,0,0,0, 0,c,s,0, 0,-s,c,0, 0,0,0,1]);
-    };
+    const rotateY = (angle: number) => { const c = Math.cos(angle), s = Math.sin(angle); return new Float32Array([c,0,-s,0, 0,1,0,0, s,0,c,0, 0,0,0,1]); };
+    const rotateX = (angle: number) => { const c = Math.cos(angle), s = Math.sin(angle); return new Float32Array([1,0,0,0, 0,c,s,0, 0,-s,c,0, 0,0,0,1]); };
+    const rotateZ = (angle: number) => { const c = Math.cos(angle), s = Math.sin(angle); return new Float32Array([c,s,0,0, -s,c,0,0, 0,0,1,0, 0,0,0,1]); };
     const translate = (z: number) => new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,z,1]);
 
     gl.enable(gl.DEPTH_TEST);
@@ -163,8 +158,8 @@ export function GarvexOrb({ size = 220 }: { size?: number }) {
     let raf = 0;
     let alive = true;
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const w = Math.max(96, Math.floor(size * dpr));
+      const dpr = Math.min(window.devicePixelRatio || 1, 3);
+      const w = Math.max(192, Math.floor(size * dpr));
       if (canvas.width !== w || canvas.height !== w) {
         canvas.width = w;
         canvas.height = w;
@@ -176,7 +171,12 @@ export function GarvexOrb({ size = 220 }: { size?: number }) {
       resize();
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       const t = now / 1000;
-      const model = multiply(rotateY(t * 0.55), rotateX(Math.sin(t * 0.35) * 0.16));
+      const x = Math.sin(t * 0.31) * 0.48 + Math.cos(t * 0.17) * 0.18;
+      const y = t * 0.62;
+      const z = Math.cos(t * 0.27) * 0.42 + Math.sin(t * 0.13) * 0.18;
+      let model = rotateX(x);
+      model = multiply(rotateY(y), model);
+      model = multiply(rotateZ(z), model);
       const vp = multiply(projection(Math.PI / 3.1, 1, 0.1, 10), translate(-2.65));
       gl.uniformMatrix4fv(modelLoc, false, model);
       gl.uniformMatrix4fv(vpLoc, false, vp);
