@@ -1,0 +1,29 @@
+import { timingSafeEqual } from "node:crypto";
+import { drainQueue } from "@/lib/worker";
+import { enqueue, recoverStaleJobs } from "@/lib/queue";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+function authorized(request: Request) {
+  const expected = process.env.WORKER_TICK_SECRET;
+  const provided = request.headers.get("x-worker-tick-secret");
+  if (!expected || !provided) return false;
+  const a = Buffer.from(expected); const b = Buffer.from(provided);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+export async function POST(request: Request) {
+  if (!authorized(request)) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  try {
+    await recoverStaleJobs();
+    const bucket = Math.floor(Date.now() / 60_000);
+    await enqueue({ type: "reconcile", payload: {}, dedupeKey: `reconcile:${bucket}`, maxAttempts: 1 });
+    await enqueue({ type: "metrics-collect", payload: {}, dedupeKey: `metrics:${bucket}`, maxAttempts: 1 });
+    await enqueue({ type: "cleanup", payload: {}, dedupeKey: `cleanup:${Math.floor(Date.now() / (30 * 60_000))}`, maxAttempts: 1 });
+    const processed = await drainQueue(5);
+    return Response.json({ ok: true, processed, scheduler: "cron", note: "Vercel cron runs at minute granularity; jobs can wait roughly up to 60 seconds when traffic is low." });
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+  }
+}
