@@ -22,6 +22,17 @@ async function tick(request: Request) {
     await enqueue({ type: "reconcile", payload: {}, dedupeKey: `reconcile:${bucket}`, maxAttempts: 1 });
     await enqueue({ type: "metrics-collect", payload: {}, dedupeKey: `metrics:${bucket}`, maxAttempts: 1 });
     await enqueue({ type: "cleanup", payload: {}, dedupeKey: `cleanup:${Math.floor(Date.now() / (30 * 60_000))}`, maxAttempts: 1 });
+    if (process.env.SELF_PRACTICE_ENABLED === "1") {
+      const practiceBucket = Math.floor(Date.now() / (15 * 60_000));
+      await enqueue({
+        type: "self-practice",
+        queue: "self-practice",
+        payload: {},
+        dedupeKey: `self-practice:${practiceBucket}`,
+        maxAttempts: 1,
+        priority: 25,
+      });
+    }
     const processed = await drainQueue(5);
     return Response.json({ ok: true, processed, scheduler: "cron", note: "Vercel cron runs at minute granularity; jobs can wait roughly up to 60 seconds when traffic is low." });
   } catch (error) {
