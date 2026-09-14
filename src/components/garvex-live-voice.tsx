@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 type VoiceStatus = "off" | "listening" | "thinking" | "speaking";
 type LiveMessage = { role: "user" | "assistant"; content: string };
 type RecognitionLike = { continuous: boolean; interimResults: boolean; lang: string; start: () => void; stop: () => void; onresult: ((event: any) => void) | null; onend: (() => void) | null; onerror: ((event: any) => void) | null };
 type SpeechRecognitionCtor = new () => RecognitionLike;
 type LiveVoiceProps = { csrf: string; compact?: boolean };
+type Source = { title?: string; url: string };
 
 function getSpeechRecognition() {
   const w = window as any;
@@ -14,68 +16,59 @@ function getSpeechRecognition() {
 }
 function normalize(text: string) { return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim(); }
 function similarityEnough(a: string, b: string) { const x = normalize(a); const y = normalize(b); return Boolean(x && y && (x === y || x.includes(y) || y.includes(x))); }
+function aborted(error: unknown) { return error instanceof DOMException && error.name === "AbortError"; }
 
 export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
   const [active, setActive] = useState(false);
   const [status, setStatus] = useState<VoiceStatus>("off");
   const [transcript, setTranscript] = useState("");
   const [response, setResponse] = useState("");
+  const [sources, setSources] = useState<Source[]>([]);
+  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   const recognitionRef = useRef<RecognitionLike | null>(null);
   const activeRef = useRef(false);
   const speakingRef = useRef(false);
   const thinkingRef = useRef(false);
-  const audioQueueRef = useRef<{ sequence: number; src: string; text: string }[]>([]);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const historyRef = useRef<LiveMessage[]>([]);
   const lastSpokenRef = useRef("");
+
+  useEffect(() => {
+    if (compact) setPortalTarget(document.querySelector(".garvex-v4-input-row"));
+    else setPortalTarget(null);
+  }, [compact]);
 
   useEffect(() => () => {
     activeRef.current = false;
     thinkingRef.current = false;
     recognitionRef.current?.stop();
     abortRef.current?.abort();
-    audioQueueRef.current = [];
-    audioRef.current?.pause();
-    audioRef.current = null;
+    stopAudio();
   }, []);
 
   const stopAudio = () => {
-    audioQueueRef.current = [];
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      audioRef.current.src = "";
-      audioRef.current = null;
-    }
     speakingRef.current = false;
+    window.speechSynthesis?.cancel();
   };
 
-  const playNextAudio = () => {
-    if (!activeRef.current || speakingRef.current) return;
-    const next = audioQueueRef.current.shift();
-    if (!next) {
-      if (activeRef.current && !thinkingRef.current) {
-        setStatus("listening");
-        try { recognitionRef.current?.start(); } catch {}
-      }
-      return;
-    }
-    const audio = new Audio(next.src);
-    audioRef.current = audio;
+  const speak = (text: string) => {
+    const clean = text.trim();
+    if (!clean || !window.speechSynthesis || !activeRef.current) return;
+    const utterance = new SpeechSynthesisUtterance(clean);
+    utterance.lang = /[\u0600-\u06ff]/.test(clean) ? "ar-EG" : "en-US";
+    utterance.rate = 1.08;
+    utterance.pitch = 1;
     speakingRef.current = true;
-    lastSpokenRef.current = next.text;
     setStatus("speaking");
-    audio.onended = () => { audioRef.current = null; speakingRef.current = false; playNextAudio(); };
-    audio.onerror = () => { audioRef.current = null; speakingRef.current = false; playNextAudio(); };
-    void audio.play().catch(() => { audioRef.current = null; speakingRef.current = false; playNextAudio(); });
-  };
-
-  const queueAudio = (src: string, sequence: number, text: string) => {
-    if (!src) return;
-    audioQueueRef.current.push({ sequence, src, text });
-    audioQueueRef.current.sort((a, b) => a.sequence - b.sequence);
-    playNextAudio();
+    utterance.onend = () => {
+      speakingRef.current = false;
+      if (activeRef.current && !thinkingRef.current) setStatus("listening");
+    };
+    utterance.onerror = () => {
+      speakingRef.current = false;
+      if (activeRef.current && !thinkingRef.current) setStatus("listening");
+    };
+    window.speechSynthesis.speak(utterance);
   };
 
   const interrupt = () => {
@@ -90,14 +83,28 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
     thinkingRef.current = true;
     setStatus("thinking");
     setResponse("");
+    setSources([]);
     const controller = new AbortController();
     abortRef.current = controller;
-    const res = await fetch("/api/v1/admin/garvex/live", { method: "POST", headers: { "content-type": "application/json", "x-csrf-token": csrf }, body: JSON.stringify({ prompt: text, history: historyRef.current.slice(-8) }), signal: controller.signal });
+    const res = await fetch("/api/v1/admin/garvex/live", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-csrf-token": csrf },
+      body: JSON.stringify({ prompt: text, history: historyRef.current.slice(-8), voice: true }),
+      signal: controller.signal,
+    });
     if (!res.ok || !res.body) throw new Error(`Live voice request failed (${res.status})`);
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let full = "";
+    let spokenBuffer = "";
+    const flushSpeech = (force = false) => {
+      if (!spokenBuffer.trim()) return;
+      const ready = force ? spokenBuffer.trim() : spokenBuffer.trim().replace(/[,:;،؛]+$/, "");
+      if (!ready) return;
+      spokenBuffer = "";
+      speak(ready);
+    };
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -107,18 +114,26 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
       for (const event of events) {
         const line = event.split("\n").find((item) => item.startsWith("data:"));
         if (!line) continue;
-        const payload = JSON.parse(line.slice(5).trim()) as { type: string; text?: string; error?: string; audio?: string; sequence?: number };
-        if (payload.type === "delta" && payload.text) { full += payload.text; setResponse(full); }
-        if (payload.type === "audio" && payload.audio) queueAudio(payload.audio, payload.sequence ?? 0, payload.text ?? "");
+        const payload = JSON.parse(line.slice(5).trim()) as { type: string; text?: string; error?: string; stage?: string; sources?: Source[]; tts?: string };
+        if (payload.type === "stage" && payload.stage) setStatus(payload.stage.toLowerCase().includes("generat") ? "thinking" : "thinking");
+        if (payload.type === "delta" && payload.text) {
+          full += payload.text;
+          spokenBuffer += payload.text;
+          setResponse(full);
+          const match = spokenBuffer.match(/^([\s\S]{36,420}?[.!?。！？])\s*/);
+          if (match) {
+            spokenBuffer = spokenBuffer.slice(match[0].length);
+            speak(match[1]);
+          }
+        }
+        if (payload.type === "sources" && payload.sources?.length) setSources(payload.sources);
         if (payload.type === "error") throw new Error(payload.error ?? "Live voice failed");
       }
     }
+    if (spokenBuffer.trim()) speak(spokenBuffer.trim());
     historyRef.current = [...historyRef.current, { role: "user", content: text }, { role: "assistant", content: full }].slice(-12);
     thinkingRef.current = false;
-    if (!speakingRef.current && audioQueueRef.current.length === 0 && activeRef.current) {
-      setStatus("listening");
-      try { recognitionRef.current?.start(); } catch {}
-    }
+    if (activeRef.current && !speakingRef.current) setStatus("listening");
   };
 
   const stop = () => {
@@ -131,11 +146,15 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
 
   const start = () => {
     const Ctor = getSpeechRecognition();
-    if (!Ctor) { setResponse("Live Voice يحتاج Chrome أو Edge يدعم Speech Recognition."); return; }
+    if (!Ctor) {
+      setResponse("Live Voice يحتاج Chrome أو Edge يدعم Speech Recognition.");
+      return;
+    }
     activeRef.current = true;
     setActive(true);
     thinkingRef.current = false;
     setStatus("listening");
+    setTranscript("");
     const recognition = new Ctor();
     recognition.continuous = true;
     recognition.interimResults = true;
@@ -148,35 +167,45 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
         if (event.results[i].isFinal) finalText += part;
         else interim += part;
       }
-      setTranscript(`${finalText}${interim}`.trim());
+      const visible = `${finalText}${interim}`.trim();
+      if (visible) setTranscript(visible);
       const spoken = finalText.trim();
       if (!spoken) return;
-      if (speakingRef.current && similarityEnough(spoken, lastSpokenRef.current)) return;
+      if (speakingRef.current) {
+        if (!similarityEnough(spoken, lastSpokenRef.current)) interrupt();
+        else return;
+      }
       void streamReply(spoken).catch((error) => {
-        if (controllerIsAborted(error)) return;
+        if (aborted(error)) return;
         thinkingRef.current = false;
         setResponse(error instanceof Error ? error.message : String(error));
         if (activeRef.current) setStatus("listening");
       });
     };
-    recognition.onend = () => { if (activeRef.current && !thinkingRef.current) { try { recognition.start(); } catch {} } };
-    recognition.onerror = () => { if (activeRef.current && !thinkingRef.current) setStatus("listening"); };
+    recognition.onend = () => {
+      if (activeRef.current) {
+        try { recognition.start(); } catch {}
+      }
+    };
+    recognition.onerror = () => {
+      if (activeRef.current && !thinkingRef.current) setStatus("listening");
+    };
     recognitionRef.current = recognition;
     try { recognition.start(); } catch {}
   };
 
-  return (
+  const control = (
     <section className={`garvex-live-voice ${active ? "is-active" : ""} ${compact ? "compact" : ""}`} aria-label="Garvex Live Voice">
-      <div className="garvex-live-voice-main">
-        <button type="button" className="garvex-live-voice-button" onClick={active ? stop : start} aria-pressed={active}>
-          <span className="garvex-live-voice-pulse" aria-hidden />
-          <span>{active ? "Live Voice · On" : "Live Voice"}</span>
-        </button>
-        <span className="garvex-live-voice-status">{status === "listening" ? "Listening…" : status === "thinking" ? "Thinking…" : status === "speaking" ? "Speaking…" : "Ready"}</span>
-      </div>
-      {!compact && (transcript || response) ? <div className="garvex-live-voice-live" aria-live="polite"><span>{transcript}</span>{response ? <span>{response}</span> : null}</div> : null}
+      <button type="button" className="garvex-live-voice-button" onClick={active ? stop : start} aria-pressed={active} aria-label={active ? "Turn off Live Voice" : "Turn on Live Voice"} title="Live Voice">
+        <span className="garvex-live-voice-pulse" aria-hidden />
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14.5a3.5 3.5 0 0 0 3.5-3.5V7a3.5 3.5 0 0 0-7 0v4a3.5 3.5 0 0 0 3.5 3.5Z"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>
+        {!compact ? <span>{active ? "Live Voice · On" : "Live Voice"}</span> : null}
+      </button>
+      {!compact ? <span className="garvex-live-voice-status">{status === "listening" ? "Listening…" : status === "thinking" ? "Thinking…" : status === "speaking" ? "Speaking…" : "Ready"}</span> : null}
+      {!compact && (transcript || response) ? <div className="garvex-live-voice-live"><span>{transcript}</span>{response ? <span>{response}</span> : null}{sources.length ? <div className="garvex-live-voice-sources">{sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer noopener">{source.title || source.url}</a>)}</div> : null}</div> : null}
     </section>
   );
-}
 
-function controllerIsAborted(error: unknown) { return error instanceof DOMException && error.name === "AbortError"; }
+  if (compact) return portalTarget ? createPortal(control, portalTarget) : null;
+  return control;
+}
