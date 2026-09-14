@@ -1,8 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "outputDirectory": ".next",
-  "crons": [
-    { "path": "/api/internal/worker-tick", "schedule": "* * * * *" }
-  ]
+  "outputDirectory": ".next"
 }
