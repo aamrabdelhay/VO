@@ -1,6 +1,9 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
   if (process.env.NEXT_PHASE === "phase-production-build") return;
+  if (process.env.NODE_ENV === "production" && !process.env.PLATFORM_ENCRYPTION_KEY) {
+    throw new Error("PLATFORM_ENCRYPTION_KEY is required in production before platform bootstrap");
+  }
 
   const { log } = await import("@/lib/logger");
   try {
