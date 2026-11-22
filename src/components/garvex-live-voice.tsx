@@ -38,8 +38,10 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
   const nextAudioSequenceRef = useRef(0);
 
   useEffect(() => {
-    if (compact) setPortalTarget(document.querySelector(".garvex-v4-input-row"));
-    else setPortalTarget(null);
+    const frame = window.requestAnimationFrame(() => {
+      setPortalTarget(compact ? document.querySelector<HTMLElement>(".garvex-v4-input-row") : null);
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [compact]);
 
   useEffect(() => () => {
@@ -151,7 +153,8 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
         if (payload.type === "error") throw new Error(payload.error ?? "Live voice failed");
       }
     }
-    historyRef.current = [...historyRef.current, { role: "user", content: text }, { role: "assistant", content: full }].slice(-12);
+    const nextHistory: LiveMessage[] = [...historyRef.current, { role: "user" as const, content: text }, { role: "assistant" as const, content: full }].slice(-12);
+    historyRef.current = nextHistory;
     thinkingRef.current = false;
     if (activeRef.current && !speakingRef.current) {
       if (audioQueueRef.current.length) playNextAudio();

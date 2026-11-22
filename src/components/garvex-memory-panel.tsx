@@ -15,7 +15,10 @@ export function GarvexMemoryPanel({ csrf }: { csrf: string }) {
     setItems(data.data ?? []);
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => { void load(); });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
 
   return <section aria-label="Garvex memory">
     <h2>Memory</h2>

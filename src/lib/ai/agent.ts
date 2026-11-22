@@ -4,7 +4,7 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { aiActions, aiConversations, aiFixAttempts, aiMessages, deployments, projects } from "@/db/schema";
 import { ToolGateway, type AIPermission } from "@/lib/ai/gateway";
-import { providerFor, resolveAIConfig, spentTodayCents, type ChatMessage } from "@/lib/ai/provider";
+import { providerFor, resolveAIConfig, spentTodayCents, textContent, type ChatMessage } from "@/lib/ai/provider";
 import { audit, notify } from "@/lib/audit";
 import { readLiveLogs } from "@/lib/deployment-logs";
 import { projectEnv } from "@/lib/deploy";
@@ -56,7 +56,7 @@ async function ask(
     await db.insert(aiMessages).values({
       conversationId,
       role: message.role,
-      content: message.content.slice(0, 20000),
+      content: textContent(message.content).slice(0, 20000),
     });
   }
   await db.insert(aiMessages).values({

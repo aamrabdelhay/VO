@@ -17,7 +17,7 @@ export async function deepResearch(projectId: string, conversationId: string | n
   const gateway = new ToolGateway({ projectId, orgId: project.orgId, conversationId: conversationId ?? crypto.randomUUID(), permission: "READ_ONLY", secrets });
   const search = await gateway.call("web_search", { query: prompt });
   if (!search.ok || !Array.isArray(search.result)) throw new Error(search.error ?? "Web search failed");
-  const candidates = (search.result as { title?: string; url?: string; snippet?: string }[]).filter((item) => item.url && /^https?:\/\//i.test(item.url)).slice(0, 4);
+  const candidates = (search.result as { title?: string; url?: string; snippet?: string }[]).filter((item): item is { title?: string; url: string; snippet?: string } => typeof item.url === "string" && /^https?:\/\//i.test(item.url)).slice(0, 4);
   const fetched: { title: string; url: string; text: string }[] = [];
   for (const candidate of candidates) {
     const spent = await spentTodayCents(project.orgId);
