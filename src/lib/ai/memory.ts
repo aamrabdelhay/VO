@@ -7,9 +7,10 @@ import { getPlatformSecret } from "@/lib/platform-secrets";
 const RETENTION_DAYS = Math.max(1, Number(process.env.GARVEX_MEMORY_RETENTION_DAYS ?? 180));
 const RETENTION_MIN_USES = Math.max(0, Number(process.env.GARVEX_MEMORY_RETENTION_MIN_USES ?? 1));
 const SIMILARITY_THRESHOLD = Math.min(0.99, Math.max(0.5, Number(process.env.GARVEX_MEMORY_SIMILARITY_THRESHOLD ?? 0.78)));
+const LESSON_SIMILARITY_THRESHOLD = Math.min(0.99, Math.max(0.5, Number(process.env.GARVEX_LESSON_SIMILARITY_THRESHOLD ?? 0.76)));
 
 function parseJsonArray(text: string): string[] {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const fenced = text.match(/\\x60{3}(?:json)?\\s*([\\s\\S]*?)\\x60{3}/i);
   const candidate = (fenced?.[1] ?? text).trim();
   const start = candidate.indexOf("[");
   const end = candidate.lastIndexOf("]");
@@ -31,9 +32,9 @@ export async function embed(text: string): Promise<number[] | null> {
   if (!key) return null;
   const base = openRouter ? "https://openrouter.ai/api/v1" : "https://api.openai.com/v1";
   const model = openRouter ? "openai/text-embedding-3-small" : "text-embedding-3-small";
-  const response = await fetch(`${base}/embeddings`, {
+  const response = await fetch(base + "/embeddings", {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    headers: { "content-type": "application/json", authorization: "Bearer " + key },
     body: JSON.stringify({ model, input: text.slice(0, 8000) }),
     cache: "no-store",
     signal: AbortSignal.timeout(10000),
@@ -57,11 +58,11 @@ export async function extractMemories(conversationId: string) {
     .select({ role: aiMessages.role, content: aiMessages.content })
     .from(aiMessages)
     .where(eq(aiMessages.conversationId, conversationId))
-    .orderBy(sql`${aiMessages.createdAt} desc`)
+    .orderBy(sql\`\${aiMessages.createdAt} desc\`)
     .limit(4);
   if (messages.length < 2) return 0;
 
-  const exchange = messages.reverse().map((message) => `${message.role}: ${message.content.slice(0, 6000)}`).join("\n\n");
+  const exchange = messages.reverse().map((message) => \`\${message.role}: \${message.content.slice(0, 6000)}\`).join("\n\n");
   const config = await resolveAIConfig(row.project.orgId);
   if (!config) return 0;
 
@@ -93,29 +94,57 @@ export async function extractMemories(conversationId: string) {
 export async function retrieveRelevantMemories(orgId: string, projectId: string | null, queryText: string, limit = 6) {
   const embedding = await embed(queryText);
   if (!embedding) return [];
-  const vector = `[${embedding.join(",")}]`;
-  const rows = await db.execute<{ id: string; content: string; similarity: number }>(sql`
-    select id, content, 1 - (embedding <=> ${vector}::vector) as similarity
+  const vector = "[" + embedding.join(",") + "]";
+  const rows = await db.execute<{ id: string; content: string; similarity: number }>(sql\`
+    select id, content, 1 - (embedding <=> \${vector}::vector) as similarity
     from garvex_memories
-    where org_id = ${orgId}
-      and (${projectId} is null or project_id is null or project_id = ${projectId})
-    order by embedding <=> ${vector}::vector
-    limit ${Math.min(12, Math.max(1, limit))}
-  `);
+    where org_id = \${orgId}
+      and (\${projectId} is null or project_id is null or project_id = \${projectId})
+    order by embedding <=> \${vector}::vector
+    limit \${Math.min(12, Math.max(1, limit))}
+  \`);
   const relevant = (rows.rows ?? []).filter((row) => Number(row.similarity) >= SIMILARITY_THRESHOLD).slice(0, limit);
   if (!relevant.length) return [];
   const ids = relevant.map((row) => row.id);
-  await db.execute(sql`update garvex_memories set last_used_at = now(), use_count = use_count + 1 where id in (${sql.join(ids.map((id) => sql`${id}`), sql`,`)})`);
+  await db.execute(sql\`update garvex_memories set last_used_at = now(), use_count = use_count + 1 where id in (\${sql.join(ids.map((id) => sql\`\${id}\`), sql\`,\`)})\`);
+  return relevant;
+}
+
+export async function retrieveApprovedEvolutionLessons(orgId: string, projectId: string, queryText: string, limit = 4) {
+  const embedding = await embed(queryText);
+  if (!embedding) return [];
+  const vector = "[" + embedding.join(",") + "]";
+  const rows = await db.execute<{ id: string; title: string; content: string; similarity: number; importance: number }>(sql\`
+    select id, title, content, importance,
+           1 - (embedding <=> \${vector}::vector) as similarity
+    from garvex_evolution_lessons
+    where org_id = \${orgId}
+      and project_id = \${projectId}
+      and status = 'APPROVED'
+      and embedding is not null
+    order by embedding <=> \${vector}::vector
+    limit \${Math.min(8, Math.max(1, limit))}
+  \`);
+  const relevant = (rows.rows ?? [])
+    .filter((row) => Number(row.similarity) >= LESSON_SIMILARITY_THRESHOLD)
+    .slice(0, limit);
+  if (!relevant.length) return [];
+  const ids = relevant.map((row) => row.id);
+  await db.execute(sql\`
+    update garvex_evolution_lessons
+    set last_used_at = now(), use_count = use_count + 1
+    where id in (\${sql.join(ids.map((id) => sql\`\${id}\`), sql\`,\`)})
+  \`);
   return relevant;
 }
 
 export async function cleanupMemories() {
   const cutoff = new Date(Date.now() - RETENTION_DAYS * 86_400_000);
-  const deleted = await db.execute(sql`
+  const deleted = await db.execute(sql\`
     delete from garvex_memories
-    where coalesce(last_used_at, created_at) < ${cutoff}
-      and use_count < ${RETENTION_MIN_USES}
+    where coalesce(last_used_at, created_at) < \${cutoff}
+      and use_count < \${RETENTION_MIN_USES}
     returning id
-  `);
+  \`);
   return deleted.rows?.length ?? 0;
 }

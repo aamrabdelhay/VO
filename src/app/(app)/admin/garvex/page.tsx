@@ -9,12 +9,14 @@ import { freeDomainForProject } from "@/lib/vercel-hosting";
 import { GarvexChatV4 } from "@/components/garvex-chat-v4";
 import { GarvexFileReader } from "@/components/garvex-file-reader";
 import { GarvexCapabilityPanel } from "@/components/garvex-capability-panel";
+import { GarvexEvolutionReview } from "@/components/garvex-evolution-review";
 import { GarvexOrb } from "@/components/garvex-orb";
 import { GarvexDefaultAI } from "@/components/garvex-default-ai";
 import { GarvexLiveVoice } from "@/components/garvex-live-voice";
 import { GarvexUiEnhancer } from "@/components/garvex-ui-enhancer";
 import "@/app/garvex-file-reader.css";
 import "@/app/garvex-capability-panel.css";
+import "@/app/garvex-evolution-review.css";
 import "@/app/garvex-v4.css";
 import "@/app/garvex-overrides.css";
 import "@/app/garvex-live-voice.css";
@@ -48,7 +50,7 @@ export default async function GarvexPage() {
     <GarvexCapabilityPanel capabilities={capabilities} />
     <section className="garvex-self-practice-panel" aria-label="Verified code-repair examples">
       <strong>Verified code-repair examples collected: {selfPractice.verifiedExamplesTotal}</strong>
-      <span>Run scripts/export-training-set.mjs and fine-tune periodically to apply them.</span>
+      <span>Only administrator-approved lessons backed by verified repairs are available to Garvex.</span>
       <div>
         <span>Attempts today: {selfPractice.attemptedToday}/{selfPractice.dailyLimit}</span>
         <span>Pass rate: {selfPractice.passRateToday}%</span>
@@ -56,6 +58,7 @@ export default async function GarvexPage() {
         <span>Status: {selfPractice.enabled ? "enabled" : "disabled"}</span>
       </div>
     </section>
+    <GarvexEvolutionReview csrf={user.csrfToken} />
     <GarvexFileReader csrf={user.csrfToken} />
   </>;
 }
