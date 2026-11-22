@@ -151,7 +151,7 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
         if (payload.type === "error") throw new Error(payload.error ?? "Live voice failed");
       }
     }
-    const nextHistory: LiveMessage[] = [...historyRef.current, { role: "user", content: text }, { role: "assistant", content: full }].slice(-12);
+    const nextHistory: LiveMessage[] = [...historyRef.current, { role: "user" as const, content: text }, { role: "assistant" as const, content: full }].slice(-12);
     historyRef.current = nextHistory;
     thinkingRef.current = false;
     if (activeRef.current && !speakingRef.current) {
