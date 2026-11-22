@@ -19,7 +19,7 @@ function clampInteger(raw, fallback, minimum, maximum) {
 }
 
 async function bootstrap() {
-  await pool.query(\`
+  await pool.query(`
     create table if not exists garvex_evolution_runs (
       id text primary key,
       worker_id text not null,
@@ -72,7 +72,7 @@ async function bootstrap() {
       on garvex_evolution_lessons(status, created_at desc);
     create index if not exists garvex_evolution_lessons_scope_idx
       on garvex_evolution_lessons(org_id, project_id, status);
-  \`);
+  `);
 }
 
 async function verifiedExamplesByProject() {
@@ -80,14 +80,14 @@ async function verifiedExamplesByProject() {
   if (!table.rows[0]?.table_name) return new Map();
 
   const result = await pool.query(
-    \`select e.id, e.project_id as "projectId", p.org_id as "orgId",
+    `select e.id, e.project_id as "projectId", p.org_id as "orgId",
             e.source, e.problem_description as "problemDescription",
             e.validation_output as "validationOutput", e.created_at as "createdAt"
      from self_practice_examples e
      inner join projects p on p.id = e.project_id
      where e.verified = true
      order by e.created_at desc
-     limit $1\`,
+     limit $1`,
     [maxExamples * maxProjects],
   );
 
@@ -184,9 +184,9 @@ async function createCandidates(runId, group, parsed) {
       : 0.5;
 
     await pool.query(
-      \`insert into garvex_evolution_lessons
+      `insert into garvex_evolution_lessons
          (id, run_id, org_id, project_id, title, content, source_example_ids, importance, status)
-       values ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,'CANDIDATE')\`,
+       values ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,'CANDIDATE')`,
       [
         randomUUID(),
         runId,
@@ -204,9 +204,9 @@ async function createCandidates(runId, group, parsed) {
   const experiment = parsed?.experiment ?? {};
   const score = Number(experiment.score);
   await pool.query(
-    \`insert into garvex_evolution_experiments
+    `insert into garvex_evolution_experiments
        (run_id,name,hypothesis,result,score,accepted)
-     values ($1,$2,$3,$4,$5,false)\`,
+     values ($1,$2,$3,$4,$5,false)`,
     [
       runId,
       String(experiment.name ?? "verified-example-review").slice(0, 200),
@@ -227,9 +227,9 @@ async function run() {
   const objective = "Generate reviewable lessons backed by successful self-practice verification. Never auto-approve.";
 
   await pool.query(
-    \`insert into garvex_evolution_runs
+    `insert into garvex_evolution_runs
        (id,worker_id,status,model,objective,input_count)
-     values ($1,$2,$3,$4,$5,$6)\`,
+     values ($1,$2,$3,$4,$5,$6)`,
     [runId, workerId, inputCount === 0 ? "SKIPPED" : "RUNNING", model, objective, inputCount],
   );
 
@@ -266,9 +266,9 @@ async function run() {
       projects: summaries,
     });
     await pool.query(
-      \`update garvex_evolution_runs
+      `update garvex_evolution_runs
        set status='COMPLETED', output=$2, completed_at=now()
-       where id=$1\`,
+       where id=$1`,
       [runId, output.slice(0, 30000)],
     );
     console.log(JSON.stringify({

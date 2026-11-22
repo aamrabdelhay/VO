@@ -21,7 +21,7 @@ function parseEvidenceIds(value: unknown): string[] {
 }
 
 async function ensureEvolutionSchema() {
-  await pool.query(\`
+  await pool.query(`
     create table if not exists self_practice_examples (
       id text primary key,
       project_id text not null references projects(id) on delete cascade,
@@ -74,7 +74,7 @@ async function ensureEvolutionSchema() {
       on garvex_evolution_lessons(status, created_at desc);
     create index if not exists garvex_evolution_lessons_scope_idx
       on garvex_evolution_lessons(org_id, project_id, status);
-  \`);
+  `);
 }
 
 export async function POST(
@@ -94,10 +94,10 @@ export async function POST(
     }
 
     const candidateResult = await pool.query(
-      \`select id, org_id as "orgId", project_id as "projectId",
+      `select id, org_id as "orgId", project_id as "projectId",
               title, content, source_example_ids as "sourceExampleIds", status
        from garvex_evolution_lessons
-       where id = $1\`,
+       where id = $1`,
       [id],
     );
     const candidate = candidateResult.rows[0];
@@ -106,10 +106,10 @@ export async function POST(
 
     if (body.decision === "reject") {
       const rejected = await pool.query(
-        \`update garvex_evolution_lessons
+        `update garvex_evolution_lessons
          set status='REJECTED', reviewed_by=$1, reviewed_at=now()
          where id=$2 and status='CANDIDATE'
-         returning id\`,
+         returning id`,
         [user.id, id],
       );
       if (!rejected.rows[0]) throw new HttpError(409, "This lesson has already been reviewed");
@@ -119,8 +119,8 @@ export async function POST(
     const evidenceIds = parseEvidenceIds(candidate.sourceExampleIds);
     if (evidenceIds.length === 0) throw new HttpError(409, "This candidate has no verifiable evidence");
     const evidence = await pool.query(
-      \`select id from self_practice_examples
-       where id = any($1::text[]) and project_id = $2 and verified = true\`,
+      `select id from self_practice_examples
+       where id = any($1::text[]) and project_id = $2 and verified = true`,
       [evidenceIds, candidate.projectId],
     );
     if (evidence.rows.length !== evidenceIds.length) {
@@ -141,11 +141,11 @@ export async function POST(
     try {
       await client.query("begin");
       const lockedResult = await client.query(
-        \`select id, org_id as "orgId", project_id as "projectId",
+        `select id, org_id as "orgId", project_id as "projectId",
                 title, content, source_example_ids as "sourceExampleIds", status
          from garvex_evolution_lessons
          where id=$1
-         for update\`,
+         for update`,
         [id],
       );
       const locked = lockedResult.rows[0];
@@ -161,8 +161,8 @@ export async function POST(
         throw new HttpError(409, "The lesson evidence changed while it was being reviewed");
       }
       const verifiedAgain = await client.query(
-        \`select id from self_practice_examples
-         where id = any($1::text[]) and project_id = $2 and verified = true\`,
+        `select id from self_practice_examples
+         where id = any($1::text[]) and project_id = $2 and verified = true`,
         [lockedEvidenceIds, locked.projectId],
       );
       if (verifiedAgain.rows.length !== lockedEvidenceIds.length) {
@@ -170,10 +170,10 @@ export async function POST(
       }
 
       const updated = await client.query(
-        \`update garvex_evolution_lessons
+        `update garvex_evolution_lessons
          set status='APPROVED', reviewed_by=$1, reviewed_at=now(), embedding=$2::vector
          where id=$3 and status='CANDIDATE'
-         returning id\`,
+         returning id`,
         [user.id, "[" + vector.join(",") + "]", id],
       );
       if (!updated.rows[0]) throw new HttpError(409, "This lesson has already been reviewed");

@@ -5,7 +5,7 @@ import { requirePlatformAdmin } from "@/lib/auth";
 export const dynamic = "force-dynamic";
 
 async function ensureEvolutionSchema() {
-  await pool.query(\`
+  await pool.query(`
     create table if not exists self_practice_examples (
       id text primary key,
       project_id text not null references projects(id) on delete cascade,
@@ -58,7 +58,7 @@ async function ensureEvolutionSchema() {
       on garvex_evolution_lessons(status, created_at desc);
     create index if not exists garvex_evolution_lessons_scope_idx
       on garvex_evolution_lessons(org_id, project_id, status);
-  \`);
+  `);
 }
 
 export async function GET() {
@@ -68,7 +68,7 @@ export async function GET() {
 
     const [rows, counts] = await Promise.all([
       pool.query(
-        \`select l.id, l.title, l.content, l.importance,
+        `select l.id, l.title, l.content, l.importance,
                 l.source_example_ids as "sourceExampleIds",
                 l.created_at as "createdAt",
                 p.id as "projectId", p.name as "projectName",
@@ -90,14 +90,14 @@ export async function GET() {
          inner join projects p on p.id = l.project_id
          where l.status = 'CANDIDATE'
          order by l.created_at desc
-         limit 50\`,
+         limit 50`,
       ),
       pool.query(
-        \`select
+        `select
            count(*) filter (where status='CANDIDATE')::int as candidates,
            count(*) filter (where status='APPROVED')::int as approved,
            count(*) filter (where status='REJECTED')::int as rejected
-         from garvex_evolution_lessons\`,
+         from garvex_evolution_lessons`,
       ),
     ]);
 
