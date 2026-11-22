@@ -38,8 +38,10 @@ export function GarvexLiveVoice({ csrf, compact = false }: LiveVoiceProps) {
   const nextAudioSequenceRef = useRef(0);
 
   useEffect(() => {
-    if (compact) setPortalTarget(document.querySelector<HTMLElement>(".garvex-v4-input-row"));
-    else setPortalTarget(null);
+    const frame = window.requestAnimationFrame(() => {
+      setPortalTarget(compact ? document.querySelector<HTMLElement>(".garvex-v4-input-row") : null);
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [compact]);
 
   useEffect(() => () => {

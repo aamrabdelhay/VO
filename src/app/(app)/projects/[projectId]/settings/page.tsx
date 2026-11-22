@@ -28,7 +28,7 @@ export default async function SettingsPage({
             </a>
           </div>
           <p className="hint">
-            This is the project's stable free production URL. It is reassigned to the newest successful deployment, so the address does not change on every deploy.
+            This is the project&apos;s stable free production URL. It is reassigned to the newest successful deployment, so the address does not change on every deploy.
           </p>
         </div>
       </Panel>
