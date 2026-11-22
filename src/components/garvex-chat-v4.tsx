@@ -70,7 +70,7 @@ export function GarvexChatV4({ csrf, providers, projects, isPlatformAdmin }: { c
         const events = buffer.split("\n\n"); buffer = events.pop() ?? "";
         for (const event of events) {
           const line = event.split("\n").find((item) => item.startsWith("data:")); if (!line) continue;
-          const payload = JSON.parse(line.slice(5).trim()) as { type: string; text?: string; error?: string; provider?: string; model?: string };
+          const payload = JSON.parse(line.slice(5).trim()) as { type: string; text?: string; error?: string; provider?: string; model?: string; stage?: string };
           if (payload.type === "stage") { setPhase(payload.stage ?? "Generating response…"); emitCapability({ kind: "text", state: "loading", provider: payload.provider, model: payload.model }); }
           if (payload.type === "delta" && payload.text) { full += payload.text; setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, content: full } : item)); }
           if (payload.type === "error") throw new Error(payload.error ?? "Streaming failed");

@@ -228,7 +228,7 @@ function safeTestCommand(command: string | null | undefined) {
   return command && TEST_COMMANDS.has(command.trim()) ? command.trim() : null;
 }
 
-async function materializeCommit(problem: Problem, project: typeof projects.$inferSelect, workspace: string) {
+async function materializeCommit(problem: Problem, project: typeof projects.$inferSelect, workspace: string, secrets: string[]) {
   const token = await installationToken(project.orgId);
   await fs.rm(workspace, { recursive: true, force: true });
   await fetchCommitTarball(project.repoFullName, problem.commitSha, workspace, token);
@@ -239,10 +239,10 @@ async function materializeCommit(problem: Problem, project: typeof projects.$inf
     ["add", "-A"],
   ]) {
     const result = await runCommand("git", args, { cwd: workspace, timeoutMs: 60_000 });
-    if (result.code !== 0) throw new Error(`Sandbox git setup failed: ${redact(result.stderr)}`);
+    if (result.code !== 0) throw new Error(`Sandbox git setup failed: ${redact(result.stderr, secrets)}`);
   }
   const baseline = await runCommand("git", ["commit", "-qm", "baseline"], { cwd: workspace, timeoutMs: 60_000 });
-  if (baseline.code !== 0) throw new Error(`Sandbox baseline commit failed: ${redact(baseline.stderr)}`);
+  if (baseline.code !== 0) throw new Error(`Sandbox baseline commit failed: ${redact(baseline.stderr, secrets)}`);
 }
 
 async function generationConfig(problem: Problem) {
@@ -335,7 +335,7 @@ export async function runSelfPracticeJob(payload: Record<string, unknown> = {}) 
   const secrets = Object.values(await projectEnv(problem.projectId, "PRODUCTION"));
 
   try {
-    await materializeCommit(problem, project, workspace);
+    await materializeCommit(problem, project, workspace, secrets);
 
     const buildCommand = safeBuildCommand(project.buildCommand ?? problem.buildCommand);
     const testCommand = safeTestCommand(project.testCommand);
